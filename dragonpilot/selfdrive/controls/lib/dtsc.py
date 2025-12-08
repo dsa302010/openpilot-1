@@ -4,7 +4,7 @@ Dynamic Turn Speed Controller (DTSC) - Smooth Hybrid Edition (Final)
 1. DTSC v18 (順滑邏輯) + DTSC v20 (強化舵角輔助)
 2. SCC-V Abort Logic (誤判防護)
 3. 5-Point Speed-Dependent Limit (5點式速度限制):
-   - 0-18 km/h: 1.8G (極致防護)
+   - 0-18 km/h: 1.7G (極致防護)
    - 90 km/h+:  2.8G (高速全開)
 4. Temporal Low-Pass Filter (時間平滑濾波，消除頓挫)
 
@@ -31,10 +31,12 @@ SAFETY_SPEED_FACTOR = 0.95
 # 解決「低速急彎衝出」與「高速過度減速」的矛盾
 # 格式: [速度 m/s], [對應的 Lat G 限制]
 # 5.0 m/s  = 18 km/h
+# 10.0 m/s = 36 km/h
 # 15.0 m/s = 54 km/h
+# 20.0 m/s = 72 km/h
 # 25.0 m/s = 90 km/h (超過此速度將鎖定為 2.8G)
 LAT_LIMIT_BP = [5.0, 10.0, 15.0, 20.0, 25.0]
-LAT_LIMIT_V  = [1.8,  1.8,  2.4, 2.65,  2.8]
+LAT_LIMIT_V  = [1.7, 1.7, 2.4, 2.6, 2.8]
 
 # --- Low-Pass Filter 平滑係數 ---
 # 範圍 0.0 ~ 1.0 (0.3 代表新數據佔 30%，舊數據佔 70%)
