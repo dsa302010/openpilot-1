@@ -1,10 +1,10 @@
 """
-Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v2)
+Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v3)
 修正項目:
-1. LPF Reset 門檻過低問題 (0.002 -> 0.2 m/s²)
-2. 其餘參數維持最佳化設定
+1. 修復 SyntaxError: 解決 elif not persistence_ok and 斷行導致的語法錯誤
+2. 包含 v2 的所有邏輯優化 (LPF Reset 0.2, Hysteresis, Min Speed Floor)
 
-Optimized based on feedback: Corrected LPF sensitivity.
+Fixed Syntax Error & Fully Optimized.
 """
 
 import numpy as np
@@ -89,7 +89,7 @@ class DTSC:
         self.hysteresis_timer = 0.0
         self.filtered_lat_limits = None
         
-        cloudlog.info(f"DTSC Final v2: Initialized with aggressiveness {self.aggressiveness:.2f}")
+        cloudlog.info(f"DTSC Final v3: Initialized with aggressiveness {self.aggressiveness:.2f}")
 
     def set_aggressiveness(self, value):
         self.aggressiveness = clamp(value, 0.5, 1.8)
@@ -214,4 +214,49 @@ class DTSC:
         if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
             dt_decel = sp_decel = 0.0
             dt_mode = None
-        elif not persistence_ok and
+        # [關鍵修正] 這裡合併為同一行，避免 SyntaxError
+        elif not persistence_ok and critical_dist < SHORT_DIST_IGNORE:
+            if abs(steer_angle_deg) < STEER_ANGLE_FOR_SHORT:
+                dt_decel = sp_decel = 0.0
+                dt_mode = None
+
+        final_required_decel = 0.0
+        if dt_mode == "EMERGENCY":
+            final_required_decel = dt_decel
+        else:
+            sp = min(sp_decel, 0.0)
+            dt = min(dt_decel, 0.0)
+            final_required_decel = min(sp, dt)
+        
+        final_required_decel = clamp(final_required_decel, EMERGENCY_DECEL, 0.0)
+
+        if final_required_decel < -0.1:
+            self.hysteresis_timer = HYSTERESIS_TIME
+            self.active = True
+        else:
+            if self.hysteresis_timer > 0:
+                self.hysteresis_timer -= DT_MPC
+                self.active = True
+            else:
+                self.active = False
+                self.hysteresis_timer = 0
+
+        if self.active:
+            pass_decel = final_required_decel if final_required_decel < 0 else 0.0
+            critical_distance = rel_pos[critical_idx] if critical_idx is not None else np.max(rel_pos)
+            critical_distance = max(critical_distance, 1e-3)
+
+            has_future_curve = any(
+                rel_pos[i] > critical_distance and curvatures[i] > FUTURE_CURVE_THRESHOLD
+                for i in range(horizon_len)
+            )
+
+            for i in range(horizon_len):
+                if rel_pos[i] <= critical_distance + 1e-6:
+                    if pass_decel < 0:
+                        a_max[i] = min(a_max[i], pass_decel)
+                else:
+                    if has_future_curve:
+                        a_max[i] = min(a_max[i], MAX_EXIT_ACCEL)
+
+        return a_min, a_max
