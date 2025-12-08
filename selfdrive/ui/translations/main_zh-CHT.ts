@@ -161,6 +161,14 @@
         <translation>全時車維 (ALKA)</translation>
     </message>
     <message>
+        <source>ALKA Min Speed</source>
+        <translation>開啟全時車維最低車速</translation>
+    </message>
+    <message>
+        <source>ALKA activates above this speed.\n0 = Enable immediately.\n1 km/h ≈ 0.6 mph</source>
+        <translation>全時車維將在速度超過此值時啟動. \n0 = 立即啟用. \n1 公里/小時 ≈ 0.6 英里</translation>
+    </message>
+    <message>
         <source>Road Edge Detection (RED)</source>
         <translation>路邊偵測 (RED)</translation>
     </message>
@@ -217,15 +225,8 @@ NOTE: This will show &apos;Car Detected in Blindspot&apos; warning.</source>
     <message>
         <source>Adaptive Coasting Mode (ACM) reduces braking to allow smoother coasting when appropriate.
 DOES NOT WORK with Experimental Mode enabled.</source>
-        <translation>自適應巡航滑行模式 (ACM) 會在適當時減少煞車，以實現更平順的滑行。\n啟用實驗模式時無法運作。</translation>
-    </message>
-    <message>
-        <source>Downhill Only</source>
-        <translation>僅限下坡</translation>
-    </message>
-    <message>
-        <source>Limited to downhill driving.</source>
-        <translation>僅限於下坡行駛。</translation>
+        <translation>自適應巡航滑行模式 (ACM) 會在適當時減少煞車，以實現更平順的滑行。
+    啟用實驗模式時無法運作。</translation>
     </message>
     <message>
         <source>Adaptive Experimental Mode (AEM)</source>
@@ -236,12 +237,13 @@ DOES NOT WORK with Experimental Mode enabled.</source>
         <translation>根據駕駛情境，在輕鬆和實驗模式之間進行自適應切換。</translation>
     </message>
     <message>
-        <source>Enable No Gas Gating (NoGG)</source>
-        <translation type="vanished">啟用無油門限制 (NoGG)</translation>
+        <source>Dynamic Turn Speed Control (DTSC)</source>
+        <translation>動態轉彎速度控制 (DTSC)</translation>
     </message>
     <message>
-        <source>Allows the car to accelerate in situations where Gas Gating would normally prevent it, like approaching traffic lights or exits.</source>
-        <translation type="vanished">允許車輛在接近紅綠燈或匝道等情況下加速，即使這些情況原本會因油門限制（Gas Gating）而無法加速。</translation>
+        <source>Road curvature and grip conditions.\nOriginally from the openpilot TACO.</source>
+        <translation>會根據即將到來的道路曲率和抓地力條件自動調整車輛的預測速度。
+    最初來自 openpilot TACO分支。</translation>
     </message>
     <message>
         <source>UI</source>
