@@ -1,8 +1,8 @@
-dragonpilot 0.10.0 r2 (2025-09-15)
+dragonpilot 0.10.0 r2 (2025-12-04) FORK Herizon
 =======================
 * ✅ openpilot 0.10.0 (devel-staging) (2025-08-06)
-* ✨ 🚧 Toyota: DSU Bypass Support by cydia2020 (Disabled, Code Change Requred) (2025-09-09)
-* ✨ Honda: EPS Mod Support (2025-09-09)
+* ✅ 🚧 Toyota: DSU Bypass Support by cydia2020 (Disabled, Code Change Requred) (2025-09-09)
+* ✅ Honda: EPS Mod Support (2025-09-09)
 * ✅ UI: Border Indicators (2025-05-27)
 * ✅ UI: Display Radar Tracks (2025-05-14)
 * ✅ UI: Rainbow Path (2025-04-02)
@@ -12,11 +12,11 @@ dragonpilot 0.10.0 r2 (2025-09-15)
 * ✅ LAT: Road Edge Detection (2025-04-01)
 * ✅ LAT: LCA Speed Changer (2025-03-21)
 * ✅ LAT: ALKA (2025-03-14)
-* ✅ 🚧 LON: Adaptive Experimental Mode (AEM) (2025-05-14)
-* ❌ ~~LON: No Gas Gating Mode (NoGG) Toggle (2025-04-19)~~
-* ✅ LON: Adaptive Coasting Mode (ACM) (2025-04-06)
+* ✨ LAT: ALKA MINI SPEED(2025-12-04)
+* ✨ LON: Adaptive Coasting Mode (ACM) (2025-11-17)
+* ✨ 🚧 LON: Adaptive Experimental Mode (AEM) (2025-12-04)
+* ✨ 🚧 LON: Dynamic Turn Speed Control (DTSC) (2025-12-04)
 * ✅ LON: Ext Radar Support (2025-03-31)
-* ❌ ~~MISC: FileServ (port 5000) (2025-05-28)~~
 * ✅ MISC: Delay Starting Loggerd (2025-06-30)
 * ✅ MISC: Auto Shutdown (2025-04-28)
 * ✅ MISC: Increase Max Speed Allowed (2025-04-18)
@@ -35,6 +35,7 @@ dragonpilot 0.10.0 r2 (2025-09-15)
 * ✅ VAG: PQ Steering Patch (2025-04-02)
 * ✅ VAG: MQB A0 SnG Mod (2025-03-20)
 * ✅ HKG: SMDPS Support (2025-04-17)
+
 
 dragonpilot 0.10.0 r1 (2025-09-05)
 =======================
