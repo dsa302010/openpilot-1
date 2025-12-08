@@ -1,8 +1,9 @@
 """
-Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v3)
-修正項目:
-1. 修復 SyntaxError: 解決 elif not persistence_ok and 斷行導致的語法錯誤
-2. 包含 v2 的所有邏輯優化 (LPF Reset 0.2, Hysteresis, Min Speed Floor)
+Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v4)
+更新項目:
+1. [修復] SyntaxError: 修正了第 217 行斷行導致的語法錯誤
+2. [新增] 支援 CarParams (CP) 傳入：解決 Hardcoded 參數問題，自動適應不同車種
+3. [包含] v2/v3 的所有邏輯優化 (LPF Reset 0.2, Hysteresis, Min Speed Floor)
 
 Fixed Syntax Error & Fully Optimized.
 """
@@ -60,7 +61,7 @@ SCCV_ABORT_PRED_LAT_ACC_TH = 0.5
 
 # --- 前方彎道與直線檢查參數 ---
 FUTURE_CURVE_THRESHOLD = 0.015
-# [修正] 提高重置門檻至 0.2 m/s²，避免過度敏感重置
+# [修正] 提高重設門檻至 0.2 m/s²，避免過度敏感重設
 LPF_RESET_LAT_ACC_THRESHOLD = 0.2
 
 # --- Hysteresis (滯後) 設定 ---
@@ -83,13 +84,25 @@ def interp_clamped(x, bp, fp):
 # DTSC 主類別
 # =============================
 class DTSC:
-    def __init__(self, aggressiveness=1.0):
+    # [新增] 這裡加入了 cp=None，允許外部傳入車輛參數
+    def __init__(self, aggressiveness=1.0, cp=None):
         self.aggressiveness = clamp(aggressiveness, 0.5, 1.8)
         self.active = False
         self.hysteresis_timer = 0.0
         self.filtered_lat_limits = None
         
-        cloudlog.info(f"DTSC Final v3: Initialized with aggressiveness {self.aggressiveness:.2f}")
+        # [關鍵優化] 自動讀取車輛參數
+        if cp is not None:
+            self.steer_ratio = cp.steerRatio
+            self.wheelbase = cp.wheelbase
+            cloudlog.info(f"DTSC Final v4: Loaded CarParams - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
+        else:
+            # 備用預設值 (若未傳入 CP)
+            self.steer_ratio = 14.3
+            self.wheelbase = 2.7
+            cloudlog.warning("DTSC Final v4: Warning! Using hardcoded params (SR:14.3, WB:2.7). Pass CP to fix.")
+        
+        cloudlog.info(f"DTSC Final v4: Initialized with aggressiveness {self.aggressiveness:.2f}")
 
     def set_aggressiveness(self, value):
         self.aggressiveness = clamp(value, 0.5, 1.8)
@@ -178,8 +191,15 @@ class DTSC:
 
     def get_mpc_constraints(self, model_msg, v_ego, base_a_min, base_a_max,
                             steer_angle_deg=0.0,
-                            steer_ratio=14.3, 
-                            wheelbase=2.7):
+                            steer_ratio=None, 
+                            wheelbase=None):
+        """
+        [優化] 參數現在預設為 None，會自動使用 __init__ 讀取到的正確車輛參數
+        """
+        # 如果呼叫時沒有傳入參數，就使用初始化時從 CP 抓到的值
+        current_steer_ratio = steer_ratio if steer_ratio is not None else self.steer_ratio
+        current_wheelbase = wheelbase if wheelbase is not None else self.wheelbase
+        
         horizon_len = len(T_IDXS_MPC)
         a_min = np.ones(horizon_len) * (base_a_min if np.isscalar(base_a_min) else base_a_min[0])
         a_max = np.array(base_a_max) if not np.isscalar(base_a_max) else np.ones(horizon_len) * base_a_max
@@ -192,12 +212,11 @@ class DTSC:
         predicted_lat_accels = np.abs(v_pred * yaw_rates)
         predicted_lat_acc_max = float(np.max(predicted_lat_accels))
 
-        # [修正] 只有當側向力確實很小 (<0.2) 時才重置，避免敏感跳動
         if predicted_lat_acc_max < LPF_RESET_LAT_ACC_THRESHOLD:
              self.filtered_lat_limits = None
 
         safe_speeds, curvatures = self._compute_safe_speeds(
-            v_pred, yaw_rates, steer_angle_deg, steer_ratio, wheelbase)
+            v_pred, yaw_rates, steer_angle_deg, current_steer_ratio, current_wheelbase)
 
         sp_decel = self._compute_sp_decel(predicted_lat_acc_max)
         dt_decel, critical_idx, dt_mode = self._compute_dtsc_decel(v_ego, v_pred, rel_pos, safe_speeds)
@@ -214,7 +233,7 @@ class DTSC:
         if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
             dt_decel = sp_decel = 0.0
             dt_mode = None
-        # [關鍵修正] 這裡合併為同一行，避免 SyntaxError
+        # [修復] 這裡已經合併為同一行，解決 SyntaxError
         elif not persistence_ok and critical_dist < SHORT_DIST_IGNORE:
             if abs(steer_angle_deg) < STEER_ANGLE_FOR_SHORT:
                 dt_decel = sp_decel = 0.0
