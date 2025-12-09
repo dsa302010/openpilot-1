@@ -18,13 +18,13 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 # ==============================================================================
 class Config:
     # --- 閾值設定 ---
-    TTC_EMERGENCY     = 0.5   # [秒] TTC 緊急碰撞時間
+    TTC_EMERGENCY     = 0.9   # [秒] TTC 緊急碰撞時間
     
     # --- 距離參數 (單位：公尺 m) ---
-    EMERGENCY_DIST_CITY    = 30.0  # [m] 市區緊急煞停
-    EMERGENCY_DIST_HIGHWAY = 50.0  # [m] 高速緊急煞停
+    EMERGENCY_DIST_CITY    = 20.0  # [m] 前車距離市區緊急觸發實驗模式
+    EMERGENCY_DIST_HIGHWAY = 40.0  # [m] 前車距離高速緊急觸發實驗模式
     
-    # [修正] 放寬視覺牆防護，讓紅燈停得住
+    # 無前車狀況下放寬視覺牆防護，讓紅燈停得住
     RADAR_MISS_DIST        = 20.0  # [m] 視覺牆防護 (原 10.0)
     RADAR_MISS_SPEED       = 10.0  # [km/h] 最低作動速度 (原 20.0)
     
@@ -170,13 +170,11 @@ class AEM:
         self._mode_manager.update()
 
     def _calculate_slow_down(self, model_end_dist, curvature, v_ego, v_kph):
-        """計算舒適減速 Urgency (修正低速不煞車問題)"""
+        """計算舒適減速 Urgency (修正低速不進入實驗模式問題)"""
         base_expected = np.interp(v_ego, Config.SLOW_DOWN_BP, Config.SLOW_DOWN_DIST)
         sensitivity = np.interp(v_kph, Config.SENSITIVITY_BP, Config.SENSITIVITY_VALS)
-        
         curve_penalty = 1.0 - (curvature * 0.2)
         expected_distance = base_expected * sensitivity * curve_penalty
-
         urgency = 0.0
         
         # [City Boost Logic] 市區增強邏輯
@@ -236,8 +234,8 @@ class AEM:
         lead = radar_msg.leadOne
         v_ego = v_kph / 3.6
         
-        # [修正] 視覺牆判定：門檻放寬到 15m，速度放寬到 10km/h
-        # 這樣 15km/h 滑向紅燈時，只要距離 < 15m 依然會觸發煞車
+        # 視覺牆判定：門檻放寬到 20m，速度放寬到 10km/h
+        # 這樣 10km/h 滑向紅燈時，只要距離 < 20m 依然會觸發實驗模式
         if not lead.status:
             if v_kph > Config.RADAR_MISS_SPEED and model_end_dist < Config.RADAR_MISS_DIST:
                 return True
