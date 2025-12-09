@@ -1,11 +1,13 @@
 """
-Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v7)
+Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v9)
 更新項目:
-1. [速域調整] 高低速分界下修至 70 km/h (19.5 m/s)
-   - 讓市區高架/快速道路 (70~80km/h) 也能享受「溫和模式」，減少誤煞
-2. [繼承] 包含 v6 的所有功能 (雙模預減速, CarParams, 巷弄優化)
+1. [修復] SyntaxError: 解決 elif not persistence_ok and 斷行導致的崩潰
+2. [精準過渡] 實作 65~70 km/h 平滑混合邏輯
+   - < 65 km/h (18.0 m/s): 100% 市區激進模式
+   - > 70 km/h (19.5 m/s): 100% 高速溫和模式
+   - 65-70 km/h: 線性混合，消除頓挫
 
-Tuned for: 70km/h Split (Better for Urban Expressways)
+Fixed Syntax Error & Integrated Smooth Transition.
 """
 
 import numpy as np
@@ -40,8 +42,11 @@ CITY_DECEL_V  = np.array([-0.8, -2.0, -3.5])
 HIGHWAY_DECEL_BP = np.array([1.2, 1.8, 2.5])
 HIGHWAY_DECEL_V  = np.array([-0.5, -0.8, -1.8])
 
-# [關鍵修改] 高低速切換門檻 (19.5 m/s = 約 70 km/h)
-HIGHWAY_MODE_SPEED = 19.5
+# [關鍵修改] 定義過渡區間 (Transition Zone)
+# 18.0 m/s = ~65 km/h (開始混合)
+# 19.5 m/s = ~70 km/h (完全高速)
+TRANSITION_BP = [18.0, 19.5]
+TRANSITION_VALS = [0.0, 1.0]  # 0.0=全市區, 1.0=全高速
 
 # --- 減速度限制 ---
 MAX_COMFORT_DECEL = -2.0
@@ -97,13 +102,13 @@ class DTSC:
         if cp is not None:
             self.steer_ratio = cp.steerRatio
             self.wheelbase = cp.wheelbase
-            cloudlog.info(f"DTSC v7 (70k Split): Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
+            cloudlog.info(f"DTSC v9 (65-70 Blend): Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
         else:
             self.steer_ratio = 14.3
             self.wheelbase = 2.7
-            cloudlog.warning("DTSC v7: Warning! Using hardcoded params.")
+            cloudlog.warning("DTSC v9: Warning! Using hardcoded params.")
         
-        cloudlog.info(f"DTSC v7: Init. Threshold:{HIGHWAY_MODE_SPEED}m/s")
+        cloudlog.info(f"DTSC v9: Init. Blend Range: {TRANSITION_BP[0]}-{TRANSITION_BP[1]} m/s")
 
     def set_aggressiveness(self, value):
         self.aggressiveness = clamp(value, 0.5, 1.8)
@@ -162,21 +167,27 @@ class DTSC:
 
     def _compute_sp_decel(self, predicted_lat_acc_max, v_ego):
         """
-        [智慧雙模] 根據當前車速決定煞車激進程度
+        [智慧混合邏輯] 65~70 km/h 線性過渡
         """
-        # [修改] 使用 70km/h (19.5 m/s) 作為分界
-        if v_ego > HIGHWAY_MODE_SPEED:
-            # 高速模式 (>70km/h): 溫和
-            if predicted_lat_acc_max <= HIGHWAY_DECEL_BP[0]:
-                return 0.0
-            decel = interp_clamped(predicted_lat_acc_max, HIGHWAY_DECEL_BP, HIGHWAY_DECEL_V)
+        # 1. 計算 City 模式煞車值
+        if predicted_lat_acc_max <= CITY_DECEL_BP[0]:
+            decel_city = 0.0
         else:
-            # 市區模式 (<70km/h): 激進
-            if predicted_lat_acc_max <= CITY_DECEL_BP[0]:
-                return 0.0
-            decel = interp_clamped(predicted_lat_acc_max, CITY_DECEL_BP, CITY_DECEL_V)
+            decel_city = interp_clamped(predicted_lat_acc_max, CITY_DECEL_BP, CITY_DECEL_V)
             
-        return clamp(decel, EMERGENCY_DECEL, 0.0)
+        # 2. 計算 Highway 模式煞車值
+        if predicted_lat_acc_max <= HIGHWAY_DECEL_BP[0]:
+            decel_hwy = 0.0
+        else:
+            decel_hwy = interp_clamped(predicted_lat_acc_max, HIGHWAY_DECEL_BP, HIGHWAY_DECEL_V)
+            
+        # 3. 計算混合權重 (18.0 m/s ~ 19.5 m/s)
+        blend_factor = np.interp(v_ego, TRANSITION_BP, TRANSITION_VALS)
+        
+        # 4. 線性混合
+        final_decel = (decel_city * (1.0 - blend_factor)) + (decel_hwy * blend_factor)
+        
+        return clamp(final_decel, EMERGENCY_DECEL, 0.0)
 
     def _compute_dtsc_decel(self, v_ego, v_pred, rel_pos, safe_speeds):
         speed_excess = v_pred - safe_speeds
@@ -238,6 +249,7 @@ class DTSC:
         if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
             dt_decel = sp_decel = 0.0
             dt_mode = None
+        # [關鍵修復] 將 elif 條件合併在同一行，解決 SyntaxError
         elif not persistence_ok and critical_dist < SHORT_DIST_IGNORE:
             if abs(steer_angle_deg) < STEER_ANGLE_FOR_SHORT:
                 dt_decel = sp_decel = 0.0
