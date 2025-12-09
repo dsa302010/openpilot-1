@@ -6,7 +6,7 @@ Copyright (c) 2025, Modified for DragonPilot
 1. [修正] 市區低速 (<55km/h) 紅綠燈不煞車問題。
    -> 加入 City Boost 邏輯：低速時移除緩衝，並加倍急迫性權重。
 2. [修正] 視覺牆防護放寬 (10m -> 15m, 20kph -> 10kph)。
-3. 保留高速平衡參數 (70/90kmh) 與 彎道救援/方向燈過濾。
+3. 保留高速平衡參數 (70/90kmh) 與 彎道救援。
 """
 
 import numpy as np
@@ -18,7 +18,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 # ==============================================================================
 class Config:
     # --- 閾值設定 ---
-    TTC_EMERGENCY     = 0.9   # [秒] TTC 緊急碰撞時間
+    TTC_EMERGENCY     = 0.5   # [秒] TTC 緊急碰撞時間
     
     # --- 距離參數 (單位：公尺 m) ---
     EMERGENCY_DIST_CITY    = 20.0  # [m] 前車距離市區緊急觸發實驗模式
