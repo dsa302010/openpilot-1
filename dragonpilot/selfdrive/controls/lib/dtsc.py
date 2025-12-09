@@ -33,9 +33,9 @@ LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8]
 LPF_ALPHA = 0.3
 
 # --- [關鍵修改] Pre-deceleration（平滑提前煞車）設定 ---
-# 更早介入 (0.5起跳)，煞車力道更強 (最大 -3.5)
+# 更早介入 (0.5起跳)，煞車力道更強 (最大 -2.5)
 ENTERING_SMOOTH_DECEL_BP = np.array([0.5, 1.0, 2.0])
-ENTERING_SMOOTH_DECEL_V  = np.array([-0.8, -2.0, -3.5])
+ENTERING_SMOOTH_DECEL_V  = np.array([-0.8, -2.0, -2.5])
 
 # --- 減速度限制（單位 m/s²）---
 MAX_COMFORT_DECEL = -2.0
@@ -51,7 +51,7 @@ MAX_EXIT_ACCEL = 0.7
 STEER_ASSIST_ANGLE_THRESHOLD = 10.0
 STEER_SPEED_SCALE = 1.0        # [恢復] 改回 1.0，確保對窄彎有足夠的減速權重
 STEER_AGGRESSIVENESS = 1.0
-MIN_STEER_SPEED_FLOOR = 3.0    # [關鍵修改] 5.0 -> 3.0 (~11 km/h)，讓巷子轉彎能降到夠低的速度
+MIN_STEER_SPEED_FLOOR = 5.0
 
 # --- 巷道誤判防護參數 (SCC-V) ---
 PERSISTENCE_MIN_FRAC = 0.5
