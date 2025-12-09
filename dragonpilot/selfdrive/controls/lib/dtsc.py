@@ -36,9 +36,9 @@ LPF_ALPHA = 0.3
 CITY_DECEL_BP = np.array([0.5, 1.0, 2.0])
 CITY_DECEL_V  = np.array([-0.8, -2.0, -3.5])
 
-# 2. 高速溫和版 (Highway): 1.3G 才開始輕微煞
-HIGHWAY_DECEL_BP = np.array([1.3, 1.8, 2.5])
-HIGHWAY_DECEL_V  = np.array([-0.3, -0.8, -1.5])
+# 2. 高速溫和版 (Highway): 1.2G 才開始輕微煞
+HIGHWAY_DECEL_BP = np.array([1.2, 1.8, 2.5])
+HIGHWAY_DECEL_V  = np.array([-0.5, -0.8, -1.8])
 
 # [關鍵修改] 高低速切換門檻 (19.5 m/s = 約 70 km/h)
 HIGHWAY_MODE_SPEED = 19.5
