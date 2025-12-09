@@ -17,7 +17,7 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 # ==============================================================================
 class Config:
     # --- 閾值設定 ---
-    TTC_EMERGENCY     = 0.5   # [秒] TTC 緊急碰撞時間 (低於此值強制觸發)
+    TTC_EMERGENCY     = 0.8   # [秒] TTC 緊急碰撞時間 (低於此值強制觸發)
     
     # --- 距離參數 (單位：公尺 m) ---
     EMERGENCY_DIST_CITY    = 30.0  # [m] 市區跟車緊急煞停距離 (放寬以避免過敏)
