@@ -1,12 +1,6 @@
 """
-AEM (Automatic Experimental Mode) - City Boost Edition (Final)
+AEM (Automatic Experimental Mode) - Final Clean Version (No Blinker)
 Copyright (c) 2025, Modified for DragonPilot
-
-版本重點：
-1. [修正] 市區低速 (<55km/h) 紅綠燈不煞車問題。
-   -> 加入 City Boost 邏輯：低速時移除緩衝，並加倍急迫性權重。
-2. [修正] 視覺牆防護放寬 (10m -> 15m, 20kph -> 10kph)。
-3. 保留高速平衡參數 (70/90kmh) 與 彎道救援。
 """
 
 import numpy as np
@@ -18,15 +12,15 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 # ==============================================================================
 class Config:
     # --- 閾值設定 ---
-    TTC_EMERGENCY     = 0.5   # [秒] TTC 緊急碰撞時間
+    TTC_EMERGENCY     = 0.9   # [秒] TTC 緊急碰撞時間
     
     # --- 距離參數 (單位：公尺 m) ---
-    EMERGENCY_DIST_CITY    = 20.0  # [m] 前車距離市區緊急觸發實驗模式
-    EMERGENCY_DIST_HIGHWAY = 40.0  # [m] 前車距離高速緊急觸發實驗模式
+    EMERGENCY_DIST_CITY    = 20.0  # [m] 市區緊急煞停
+    EMERGENCY_DIST_HIGHWAY = 40.0  # [m] 高速緊急煞停
     
-    # 無前車狀況下放寬視覺牆防護，讓紅燈停得住
-    RADAR_MISS_DIST        = 20.0  # [m] 視覺牆防護 (原 10.0)
-    RADAR_MISS_SPEED       = 10.0  # [km/h] 最低作動速度 (原 20.0)
+    # 視覺牆防護
+    RADAR_MISS_DIST        = 20.0  # [m] 視覺牆防護
+    RADAR_MISS_SPEED       = 10.0  # [km/h] 最低作動速度
     
     LEAD_CLOSE_DIST        = 15.0  # [m] 貼車防撞
     SLOW_LEAD_DIST_MAX     = 100.0 # [m] 慢車偵測
@@ -134,7 +128,8 @@ class AEM:
     def get_mode(self, current_mode_str):
         return self._mode_manager.get_mode()
 
-    def update_states(self, model_msg, radar_msg, v_ego, left_blinker=False, right_blinker=False):
+    # [移除] left_blinker, right_blinker 參數
+    def update_states(self, model_msg, radar_msg, v_ego):
         """主邏輯更新"""
         if not (len(model_msg.position.x) == ModelConstants.IDX_N and 
                 len(model_msg.position.z) == ModelConstants.IDX_N):
@@ -161,32 +156,31 @@ class AEM:
         except:
             pass
 
-        # 計算舒適減速 (含 City Boost)
+        # 計算舒適減速
         self._calculate_slow_down(model_end_dist, min(1.0, curvature_val * 500.0), v_ego, v_kph)
 
-        # 決策
-        self._make_decision(radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error, left_blinker, right_blinker)
+        # 決策 (不再傳入方向燈參數)
+        self._make_decision(radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error)
 
         self._mode_manager.update()
 
     def _calculate_slow_down(self, model_end_dist, curvature, v_ego, v_kph):
-        """計算舒適減速 Urgency (修正低速不進入實驗模式問題)"""
+        """計算舒適減速 Urgency"""
         base_expected = np.interp(v_ego, Config.SLOW_DOWN_BP, Config.SLOW_DOWN_DIST)
         sensitivity = np.interp(v_kph, Config.SENSITIVITY_BP, Config.SENSITIVITY_VALS)
+        
         curve_penalty = 1.0 - (curvature * 0.2)
         expected_distance = base_expected * sensitivity * curve_penalty
+
         urgency = 0.0
         
-        # [City Boost Logic] 市區增強邏輯
+        # City Boost Logic
         if v_kph < 55.0:
-            # 市區模式：只要預測距離小於期望值就開始計算
             if model_end_dist < expected_distance:
                 shortage = expected_distance - model_end_dist
                 shortage_ratio = shortage / expected_distance
-                # 權重加倍 (x2.5)，讓低速時反應更靈敏
                 urgency = np.clip(shortage_ratio * 2.5, 0.0, 1.0)
         else:
-            # 高速模式：維持 0.85 緩衝，避免誤煞
             if model_end_dist < (expected_distance * 0.85):
                 shortage = expected_distance - model_end_dist
                 shortage_ratio = shortage / expected_distance
@@ -195,11 +189,11 @@ class AEM:
         self._slow_down_filter.add_data(urgency)
         self._urgency = self._slow_down_filter.get_value()
 
-    def _make_decision(self, radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error, left_blinker, right_blinker):
+    def _make_decision(self, radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error):
         """分層決策"""
         
         # [優先級 0] 彎道救援
-        if self._check_bailout(v_kph, curvature_val, current_lat_error, left_blinker, right_blinker):
+        if self._check_bailout(v_kph, curvature_val, current_lat_error):
              self._mode_manager.request_mode(Config.MODE_BLENDED, confidence=1.0, emergency=True)
              return
 
@@ -216,26 +210,28 @@ class AEM:
         # [優先級 3] 預設 ACC
         self._mode_manager.request_mode(Config.MODE_ACC, confidence=0.8)
 
-    def _check_bailout(self, v_kph, curvature_val, current_lat_error, left_blinker, right_blinker):
+    # 判斷邏輯
+    def _check_bailout(self, v_kph, curvature_val, current_lat_error):
         if v_kph < Config.BAILOUT_SPEED_MIN: return False
-        if left_blinker or right_blinker: return False
-
+        
         v_ego = v_kph / 3.6
         approx_k = 2.0 * curvature_val
         estimated_lat_g = (v_ego ** 2) * approx_k
         
+        # 條件 A: 側向力極大 (失控)
         if estimated_lat_g > Config.BAILOUT_LAT_G: return True
-        if estimated_lat_g > 1.0 and current_lat_error > Config.BAILOUT_LAT_ERROR: return True
+            
+        # 條件 B: 彎中偏離 (推頭)
+        if estimated_lat_g > 0.9 and current_lat_error > Config.BAILOUT_LAT_ERROR: return True
+            
         return False
 
     def _check_danger(self, radar_msg, v_kph, model_end_dist):
-        """危險情境檢查 (修正低速視覺牆失效)"""
+        """危險情境檢查"""
         if radar_msg is None: return False
         lead = radar_msg.leadOne
         v_ego = v_kph / 3.6
         
-        # 視覺牆判定：門檻放寬到 20m，速度放寬到 10km/h
-        # 這樣 10km/h 滑向紅燈時，只要距離 < 20m 依然會觸發實驗模式
         if not lead.status:
             if v_kph > Config.RADAR_MISS_SPEED and model_end_dist < Config.RADAR_MISS_DIST:
                 return True
