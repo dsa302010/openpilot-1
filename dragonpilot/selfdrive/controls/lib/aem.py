@@ -3,7 +3,7 @@ AEM (Automatic Experimental Mode) - City Boost Edition (Final)
 Copyright (c) 2025, Modified for DragonPilot
 
 版本重點：
-1. [修正] 市區低速 (<50km/h) 紅綠燈不煞車問題。
+1. [修正] 市區低速 (<55km/h) 紅綠燈不煞車問題。
    -> 加入 City Boost 邏輯：低速時移除緩衝，並加倍急迫性權重。
 2. [修正] 視覺牆防護放寬 (10m -> 15m, 20kph -> 10kph)。
 3. 保留高速平衡參數 (70/90kmh) 與 彎道救援/方向燈過濾。
@@ -180,8 +180,8 @@ class AEM:
         urgency = 0.0
         
         # [City Boost Logic] 市區增強邏輯
-        if v_kph < 50.0:
-            # 市區模式：移除 0.85 緩衝，只要預測距離小於期望值就開始計算
+        if v_kph < 55.0:
+            # 市區模式：只要預測距離小於期望值就開始計算
             if model_end_dist < expected_distance:
                 shortage = expected_distance - model_end_dist
                 shortage_ratio = shortage / expected_distance
