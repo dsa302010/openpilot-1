@@ -1,11 +1,11 @@
 """
-Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v5)
+Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v7)
 更新項目:
-1. [巷弄優化] MIN_STEER_SPEED_FLOOR 降至 3.0 m/s (~11 km/h)，解決窄巷轉不進去的問題
-2. [提早煞車] 強化 Pre-deceleration 參數，入彎前減速感更明顯
-3. [繼承] 包含 v4 的所有功能 (CarParams 支援, 語法修復, LPF 優化)
+1. [速域調整] 高低速分界下修至 70 km/h (19.5 m/s)
+   - 讓市區高架/快速道路 (70~80km/h) 也能享受「溫和模式」，減少誤煞
+2. [繼承] 包含 v6 的所有功能 (雙模預減速, CarParams, 巷弄優化)
 
-Tuned for: Early Braking & Narrow Alleys
+Tuned for: 70km/h Split (Better for Urban Expressways)
 """
 
 import numpy as np
@@ -17,54 +17,58 @@ from openpilot.common.swaglog import cloudlog
 # 基本參數
 # =============================
 MODEL_T_IDXS = ModelConstants.T_IDXS
-DT_MPC = 0.05  # MPC 運行頻率約 20Hz
+DT_MPC = 0.05
 
 # --- 彎道 Lateral G 安全限制 ---
 BASE_LAT_ACC = 2.8
 SAFETY_SPEED_FACTOR = 0.95
 
 # --- 5點式速度依賴限製表 (m/s²) ---
-# 為了兼顧舒適度，維持推薦的「老司機」設定，但在極低速段保持防護
-# 您也可以改回 1.7 如果您希望市區轉彎更慢
+# 老司機設定 (流暢為主)
 LAT_LIMIT_BP = [5.0, 10.0, 15.0, 20.0, 25.0]
-LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8] 
+LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8]
 
-# --- Low-Pass Filter 平滑係數 ---
+# --- Low-Pass Filter ---
 LPF_ALPHA = 0.3
 
-# --- [關鍵修改] Pre-deceleration（平滑提前煞車）設定 ---
-# 更早介入 (0.5起跳)，煞車力道更強 (最大 -2.5)
-ENTERING_SMOOTH_DECEL_BP = np.array([0.5, 1.0, 2.0])
-ENTERING_SMOOTH_DECEL_V  = np.array([-0.8, -2.0, -2.5])
+# --- 雙模組 Pre-deceleration 設定 ---
+# 1. 市區激進版 (City / Alley): 0.5G 就開始煞
+CITY_DECEL_BP = np.array([0.5, 1.0, 2.0])
+CITY_DECEL_V  = np.array([-0.8, -2.0, -3.5])
 
-# --- 減速度限制（單位 m/s²）---
+# 2. 高速溫和版 (Highway): 1.3G 才開始輕微煞
+HIGHWAY_DECEL_BP = np.array([1.3, 1.8, 2.5])
+HIGHWAY_DECEL_V  = np.array([-0.3, -0.8, -1.5])
+
+# [關鍵修改] 高低速切換門檻 (19.5 m/s = 約 70 km/h)
+HIGHWAY_MODE_SPEED = 19.5
+
+# --- 減速度限制 ---
 MAX_COMFORT_DECEL = -2.0
 EMERGENCY_DECEL   = -4.5
 
 # MIN_CURVE_DISTANCE
 MIN_CURVE_DISTANCE = 5.0
 
-# MAX_EXIT_ACCEL (出彎限制加速)
+# MAX_EXIT_ACCEL
 MAX_EXIT_ACCEL = 0.7
 
-# --- 強化版舵角輔助參數 ---
+# --- 舵角輔助參數 ---
 STEER_ASSIST_ANGLE_THRESHOLD = 10.0
-STEER_SPEED_SCALE = 1.0        # [恢復] 改回 1.0，確保對窄彎有足夠的減速權重
+STEER_SPEED_SCALE = 1.0
 STEER_AGGRESSIVENESS = 1.0
 MIN_STEER_SPEED_FLOOR = 5.0
 
-# --- 巷道誤判防護參數 (SCC-V) ---
+# --- SCC-V 誤判防護 ---
 PERSISTENCE_MIN_FRAC = 0.5
 CURVATURE_MIN_FOR_PERSIST = 0.01
 SHORT_DIST_IGNORE = 3.5
 STEER_ANGLE_FOR_SHORT = 8.0
 SCCV_ABORT_PRED_LAT_ACC_TH = 0.5
 
-# --- 前方彎道與直線檢查參數 ---
+# --- 其他參數 ---
 FUTURE_CURVE_THRESHOLD = 0.015
 LPF_RESET_LAT_ACC_THRESHOLD = 0.2
-
-# --- Hysteresis (滯後) 設定 ---
 HYSTERESIS_TIME = 0.5
 
 # =============================
@@ -93,13 +97,13 @@ class DTSC:
         if cp is not None:
             self.steer_ratio = cp.steerRatio
             self.wheelbase = cp.wheelbase
-            cloudlog.info(f"DTSC v5 (Alley Tuned): Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
+            cloudlog.info(f"DTSC v7 (70k Split): Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
         else:
             self.steer_ratio = 14.3
             self.wheelbase = 2.7
-            cloudlog.warning("DTSC v5: Warning! Using hardcoded params. Pass CP via Planner.")
+            cloudlog.warning("DTSC v7: Warning! Using hardcoded params.")
         
-        cloudlog.info(f"DTSC v5: Init. Aggr:{self.aggressiveness:.2f}, MinSpeed:{MIN_STEER_SPEED_FLOOR}m/s")
+        cloudlog.info(f"DTSC v7: Init. Threshold:{HIGHWAY_MODE_SPEED}m/s")
 
     def set_aggressiveness(self, value):
         self.aggressiveness = clamp(value, 0.5, 1.8)
@@ -151,17 +155,27 @@ class DTSC:
                 lat_acc_limit_steer = current_lat_limits
                 raw_safe_speed_steer = np.sqrt(lat_acc_limit_steer / steer_curvature)
                 safe_speed_steer_val = raw_safe_speed_steer * SAFETY_SPEED_FACTOR * STEER_SPEED_SCALE
-                # [巷弄優化] 使用較低的地板速度 (3.0 m/s)
                 safe_speed_steer_val = np.maximum(safe_speed_steer_val, MIN_STEER_SPEED_FLOOR)
                 final_safe_speeds = np.minimum(safe_speeds_model, safe_speed_steer_val)
 
         return final_safe_speeds, curvatures
 
-    def _compute_sp_decel(self, predicted_lat_acc_max):
-        # [提早煞車] 使用更積極的查表
-        if predicted_lat_acc_max <= ENTERING_SMOOTH_DECEL_BP[0]:
-            return 0.0
-        decel = interp_clamped(predicted_lat_acc_max, ENTERING_SMOOTH_DECEL_BP, ENTERING_SMOOTH_DECEL_V)
+    def _compute_sp_decel(self, predicted_lat_acc_max, v_ego):
+        """
+        [智慧雙模] 根據當前車速決定煞車激進程度
+        """
+        # [修改] 使用 70km/h (19.5 m/s) 作為分界
+        if v_ego > HIGHWAY_MODE_SPEED:
+            # 高速模式 (>70km/h): 溫和
+            if predicted_lat_acc_max <= HIGHWAY_DECEL_BP[0]:
+                return 0.0
+            decel = interp_clamped(predicted_lat_acc_max, HIGHWAY_DECEL_BP, HIGHWAY_DECEL_V)
+        else:
+            # 市區模式 (<70km/h): 激進
+            if predicted_lat_acc_max <= CITY_DECEL_BP[0]:
+                return 0.0
+            decel = interp_clamped(predicted_lat_acc_max, CITY_DECEL_BP, CITY_DECEL_V)
+            
         return clamp(decel, EMERGENCY_DECEL, 0.0)
 
     def _compute_dtsc_decel(self, v_ego, v_pred, rel_pos, safe_speeds):
@@ -209,7 +223,7 @@ class DTSC:
         safe_speeds, curvatures = self._compute_safe_speeds(
             v_pred, yaw_rates, steer_angle_deg, current_steer_ratio, current_wheelbase)
 
-        sp_decel = self._compute_sp_decel(predicted_lat_acc_max)
+        sp_decel = self._compute_sp_decel(predicted_lat_acc_max, v_ego)
         dt_decel, critical_idx, dt_mode = self._compute_dtsc_decel(v_ego, v_pred, rel_pos, safe_speeds)
 
         speed_excess = v_pred - safe_speeds
