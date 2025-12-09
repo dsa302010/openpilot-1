@@ -1,11 +1,11 @@
 """
-Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v4)
+Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v5)
 更新項目:
-1. [修復] SyntaxError: 修正了第 217 行斷行導致的語法錯誤
-2. [新增] 支援 CarParams (CP) 傳入：解決 Hardcoded 參數問題，自動適應不同車種
-3. [包含] v2/v3 的所有邏輯優化 (LPF Reset 0.2, Hysteresis, Min Speed Floor)
+1. [巷弄優化] MIN_STEER_SPEED_FLOOR 降至 3.0 m/s (~11 km/h)，解決窄巷轉不進去的問題
+2. [提早煞車] 強化 Pre-deceleration 參數，入彎前減速感更明顯
+3. [繼承] 包含 v4 的所有功能 (CarParams 支援, 語法修復, LPF 優化)
 
-Fixed Syntax Error & Fully Optimized.
+Tuned for: Early Braking & Narrow Alleys
 """
 
 import numpy as np
@@ -23,18 +23,19 @@ DT_MPC = 0.05  # MPC 運行頻率約 20Hz
 BASE_LAT_ACC = 2.8
 SAFETY_SPEED_FACTOR = 0.95
 
-# --- [關鍵設定] 5點式速度依賴限製表 (m/s²) ---
-# 0-18 km/h: 1.7 m/s² (防護)
-# 90 km/h+:  2.8 m/s² (寬容)
+# --- 5點式速度依賴限製表 (m/s²) ---
+# 為了兼顧舒適度，維持推薦的「老司機」設定，但在極低速段保持防護
+# 您也可以改回 1.7 如果您希望市區轉彎更慢
 LAT_LIMIT_BP = [5.0, 10.0, 15.0, 20.0, 25.0]
-LAT_LIMIT_V  = [1.7, 1.7, 2.4, 2.6, 2.8]
+LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8] 
 
 # --- Low-Pass Filter 平滑係數 ---
 LPF_ALPHA = 0.3
 
-# ---  Pre-deceleration（平滑提前煞車）設定 ---
-ENTERING_SMOOTH_DECEL_BP = np.array([0.8, 1.4, 2.2])
-ENTERING_SMOOTH_DECEL_V  = np.array([-0.5, -1.0, -1.8])
+# --- [關鍵修改] Pre-deceleration（平滑提前煞車）設定 ---
+# 更早介入 (0.5起跳)，煞車力道更強 (最大 -3.5)
+ENTERING_SMOOTH_DECEL_BP = np.array([0.5, 1.0, 2.0])
+ENTERING_SMOOTH_DECEL_V  = np.array([-0.8, -2.0, -3.5])
 
 # --- 減速度限制（單位 m/s²）---
 MAX_COMFORT_DECEL = -2.0
@@ -48,9 +49,9 @@ MAX_EXIT_ACCEL = 0.7
 
 # --- 強化版舵角輔助參數 ---
 STEER_ASSIST_ANGLE_THRESHOLD = 10.0
-STEER_SPEED_SCALE = 1.05
+STEER_SPEED_SCALE = 1.0        # [恢復] 改回 1.0，確保對窄彎有足夠的減速權重
 STEER_AGGRESSIVENESS = 1.0
-MIN_STEER_SPEED_FLOOR = 5.0 
+MIN_STEER_SPEED_FLOOR = 3.0    # [關鍵修改] 5.0 -> 3.0 (~11 km/h)，讓巷子轉彎能降到夠低的速度
 
 # --- 巷道誤判防護參數 (SCC-V) ---
 PERSISTENCE_MIN_FRAC = 0.5
@@ -61,7 +62,6 @@ SCCV_ABORT_PRED_LAT_ACC_TH = 0.5
 
 # --- 前方彎道與直線檢查參數 ---
 FUTURE_CURVE_THRESHOLD = 0.015
-# [修正] 提高重設門檻至 0.2 m/s²，避免過度敏感重設
 LPF_RESET_LAT_ACC_THRESHOLD = 0.2
 
 # --- Hysteresis (滯後) 設定 ---
@@ -84,25 +84,22 @@ def interp_clamped(x, bp, fp):
 # DTSC 主類別
 # =============================
 class DTSC:
-    # [新增] 這裡加入了 cp=None，允許外部傳入車輛參數
     def __init__(self, aggressiveness=1.0, cp=None):
         self.aggressiveness = clamp(aggressiveness, 0.5, 1.8)
         self.active = False
         self.hysteresis_timer = 0.0
         self.filtered_lat_limits = None
         
-        # [關鍵優化] 自動讀取車輛參數
         if cp is not None:
             self.steer_ratio = cp.steerRatio
             self.wheelbase = cp.wheelbase
-            cloudlog.info(f"DTSC Final v4: Loaded CarParams - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
+            cloudlog.info(f"DTSC v5 (Alley Tuned): Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
         else:
-            # 備用預設值 (若未傳入 CP)
             self.steer_ratio = 14.3
             self.wheelbase = 2.7
-            cloudlog.warning("DTSC Final v4: Warning! Using hardcoded params (SR:14.3, WB:2.7). Pass CP to fix.")
+            cloudlog.warning("DTSC v5: Warning! Using hardcoded params. Pass CP via Planner.")
         
-        cloudlog.info(f"DTSC Final v4: Initialized with aggressiveness {self.aggressiveness:.2f}")
+        cloudlog.info(f"DTSC v5: Init. Aggr:{self.aggressiveness:.2f}, MinSpeed:{MIN_STEER_SPEED_FLOOR}m/s")
 
     def set_aggressiveness(self, value):
         self.aggressiveness = clamp(value, 0.5, 1.8)
@@ -129,10 +126,8 @@ class DTSC:
         return v_pred, rel_pos, yaw
 
     def _compute_safe_speeds(self, v_pred, yaw_rates, steer_angle_deg, steer_ratio, wheelbase):
-        # 1. 查表獲得當下速度允許的 Lat G
         raw_lat_limits = np.interp(v_pred, LAT_LIMIT_BP, LAT_LIMIT_V) * self.aggressiveness
         
-        # 2. 時間平滑濾波 (Temporal LPF)
         if self.filtered_lat_limits is None:
             self.filtered_lat_limits = raw_lat_limits
         else:
@@ -141,13 +136,11 @@ class DTSC:
         
         current_lat_limits = np.maximum(self.filtered_lat_limits, 1.0)
         
-        # 3. 模型曲率計算
         v_clip = np.clip(v_pred, 1.0, 100.0)
         curvatures = np.abs(yaw_rates / v_clip)
         
         safe_speeds_model = np.sqrt(current_lat_limits / (curvatures + 1e-6)) * SAFETY_SPEED_FACTOR
 
-        # 4. 強化版舵角輔助
         final_safe_speeds = safe_speeds_model.copy()
         abs_steer = abs(steer_angle_deg)
         if abs_steer > STEER_ASSIST_ANGLE_THRESHOLD and steer_ratio > 0 and wheelbase > 0:
@@ -158,12 +151,14 @@ class DTSC:
                 lat_acc_limit_steer = current_lat_limits
                 raw_safe_speed_steer = np.sqrt(lat_acc_limit_steer / steer_curvature)
                 safe_speed_steer_val = raw_safe_speed_steer * SAFETY_SPEED_FACTOR * STEER_SPEED_SCALE
+                # [巷弄優化] 使用較低的地板速度 (3.0 m/s)
                 safe_speed_steer_val = np.maximum(safe_speed_steer_val, MIN_STEER_SPEED_FLOOR)
                 final_safe_speeds = np.minimum(safe_speeds_model, safe_speed_steer_val)
 
         return final_safe_speeds, curvatures
 
     def _compute_sp_decel(self, predicted_lat_acc_max):
+        # [提早煞車] 使用更積極的查表
         if predicted_lat_acc_max <= ENTERING_SMOOTH_DECEL_BP[0]:
             return 0.0
         decel = interp_clamped(predicted_lat_acc_max, ENTERING_SMOOTH_DECEL_BP, ENTERING_SMOOTH_DECEL_V)
@@ -193,10 +188,6 @@ class DTSC:
                             steer_angle_deg=0.0,
                             steer_ratio=None, 
                             wheelbase=None):
-        """
-        [優化] 參數現在預設為 None，會自動使用 __init__ 讀取到的正確車輛參數
-        """
-        # 如果呼叫時沒有傳入參數，就使用初始化時從 CP 抓到的值
         current_steer_ratio = steer_ratio if steer_ratio is not None else self.steer_ratio
         current_wheelbase = wheelbase if wheelbase is not None else self.wheelbase
         
@@ -233,7 +224,6 @@ class DTSC:
         if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
             dt_decel = sp_decel = 0.0
             dt_mode = None
-        # [修復] 這裡已經合併為同一行，解決 SyntaxError
         elif not persistence_ok and critical_dist < SHORT_DIST_IGNORE:
             if abs(steer_angle_deg) < STEER_ANGLE_FOR_SHORT:
                 dt_decel = sp_decel = 0.0
