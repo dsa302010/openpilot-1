@@ -13,15 +13,15 @@ from openpilot.selfdrive.modeld.constants import ModelConstants
 class Config:
     # --- 閾值設定 ---
     TTC_EMERGENCY     = 0.9   # [秒] TTC 緊急碰撞時間
-    
+
     # --- 距離參數 (單位：公尺 m) ---
     EMERGENCY_DIST_CITY    = 20.0  # [m] 市區緊急煞停
     EMERGENCY_DIST_HIGHWAY = 40.0  # [m] 高速緊急煞停
-    
+
     # 視覺牆防護
     RADAR_MISS_DIST        = 20.0  # [m] 視覺牆防護
     RADAR_MISS_SPEED       = 10.0  # [km/h] 最低作動速度
-    
+
     LEAD_CLOSE_DIST        = 15.0  # [m] 貼車防撞
     SLOW_LEAD_DIST_MAX     = 100.0 # [m] 慢車偵測
 
@@ -41,7 +41,7 @@ class Config:
     # --- 減速模型 ---
     SLOW_DOWN_BP   = [0., 5.,  10., 15., 20., 25., 30.]
     SLOW_DOWN_DIST = [5., 20., 40., 60., 80., 100., 120.]
-    
+
     # --- 模式定義 ---
     MODE_ACC = 'acc'
     MODE_BLENDED = 'blended'
@@ -65,7 +65,7 @@ class SmoothKalmanFilter:
       self.x = measurement
       self.initialized = True
       return
-    
+
     self.P = self.alpha * self.P + self.Q
     K = self.P / (self.P + self.R)
     effective_K = K * (1.0 - self.smoothing_factor) + self.smoothing_factor * 0.1
@@ -96,7 +96,7 @@ class ModeTransitionManager:
 
     target_conf = min(1.0, self.mode_confidence[mode] + 0.05 * confidence)
     self.mode_confidence[mode] = target_conf
-    
+
     for m in self.mode_confidence:
       if m != mode:
         self.mode_confidence[m] = max(0.0, self.mode_confidence[m] - 0.05)
@@ -168,12 +168,12 @@ class AEM:
         """計算舒適減速 Urgency"""
         base_expected = np.interp(v_ego, Config.SLOW_DOWN_BP, Config.SLOW_DOWN_DIST)
         sensitivity = np.interp(v_kph, Config.SENSITIVITY_BP, Config.SENSITIVITY_VALS)
-        
+
         curve_penalty = 1.0 - (curvature * 0.2)
         expected_distance = base_expected * sensitivity * curve_penalty
 
         urgency = 0.0
-        
+
         # City Boost Logic
         if v_kph < 55.0:
             if model_end_dist < expected_distance:
@@ -191,7 +191,7 @@ class AEM:
 
     def _make_decision(self, radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error):
         """分層決策"""
-        
+
         # [優先級 0] 彎道救援
         if self._check_bailout(v_kph, curvature_val, current_lat_error):
              self._mode_manager.request_mode(Config.MODE_BLENDED, confidence=1.0, emergency=True)
@@ -213,17 +213,17 @@ class AEM:
     # 判斷邏輯
     def _check_bailout(self, v_kph, curvature_val, current_lat_error):
         if v_kph < Config.BAILOUT_SPEED_MIN: return False
-        
+
         v_ego = v_kph / 3.6
         approx_k = 2.0 * curvature_val
         estimated_lat_g = (v_ego ** 2) * approx_k
-        
+
         # 條件 A: 側向力極大 (失控)
         if estimated_lat_g > Config.BAILOUT_LAT_G: return True
-            
+
         # 條件 B: 彎中偏離 (推頭)
         if estimated_lat_g > 0.9 and current_lat_error > Config.BAILOUT_LAT_ERROR: return True
-            
+
         return False
 
     def _check_danger(self, radar_msg, v_kph, model_end_dist):
@@ -231,7 +231,7 @@ class AEM:
         if radar_msg is None: return False
         lead = radar_msg.leadOne
         v_ego = v_kph / 3.6
-        
+
         if not lead.status:
             if v_kph > Config.RADAR_MISS_SPEED and model_end_dist < Config.RADAR_MISS_DIST:
                 return True
@@ -239,7 +239,7 @@ class AEM:
 
         d_lead = lead.dRel
         v_lead = lead.vLead
-        
+
         thresh_dist = Config.EMERGENCY_DIST_HIGHWAY if v_kph > Config.HIGHWAY_SPEED else Config.EMERGENCY_DIST_CITY
         if d_lead < thresh_dist:
             if (v_ego > v_lead) or (d_lead < Config.LEAD_CLOSE_DIST):
