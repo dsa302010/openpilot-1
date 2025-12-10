@@ -179,7 +179,7 @@ class AEM:
             if model_end_dist < expected_distance:
                 shortage = expected_distance - model_end_dist
                 shortage_ratio = shortage / expected_distance
-                urgency = np.clip(shortage_ratio * 2.5, 0.0, 1.0)
+                urgency = np.clip(shortage_ratio * 2.0, 0.0, 1.0)
         else:
             if model_end_dist < (expected_distance * 0.85):
                 shortage = expected_distance - model_end_dist
