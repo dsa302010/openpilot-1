@@ -28,14 +28,14 @@ SAFETY_SPEED_FACTOR = 0.95
 # --- 5點式速度依賴限製表 (m/s²) ---
 # 設定以流暢為主
 LAT_LIMIT_BP = [5.0, 10.0, 15.0, 20.0, 25.0]
-LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8]
+LAT_LIMIT_V  = [2.0, 2.0, 2.4, 2.7, 2.8]
 
 # --- Low-Pass Filter ---
 LPF_ALPHA = 0.3
 
 # --- 雙模組 Pre-deceleration 設定 ---
 # 1. 市區激進版 (City / Alley): 0.5G 就開始煞
-CITY_DECEL_BP = np.array([0.5, 1.0, 2.0])
+CITY_DECEL_BP = np.array([0.8, 1.0, 2.0])
 CITY_DECEL_V  = np.array([-0.8, -2.0, -3.5])
 
 # 2. 高速溫和版 (Highway): 1.2G 才開始輕微煞
@@ -98,7 +98,7 @@ class DTSC:
         self.active = False
         self.hysteresis_timer = 0.0
         self.filtered_lat_limits = None
-        
+
         if cp is not None:
             self.steer_ratio = cp.steerRatio
             self.wheelbase = cp.wheelbase
@@ -107,7 +107,7 @@ class DTSC:
             self.steer_ratio = 14.3
             self.wheelbase = 2.7
             cloudlog.warning("DTSC v9: Warning! Using hardcoded params.")
-        
+
         cloudlog.info(f"DTSC v9: Init. Blend Range: {TRANSITION_BP[0]}-{TRANSITION_BP[1]} m/s")
 
     def set_aggressiveness(self, value):
@@ -136,18 +136,18 @@ class DTSC:
 
     def _compute_safe_speeds(self, v_pred, yaw_rates, steer_angle_deg, steer_ratio, wheelbase):
         raw_lat_limits = np.interp(v_pred, LAT_LIMIT_BP, LAT_LIMIT_V) * self.aggressiveness
-        
+
         if self.filtered_lat_limits is None:
             self.filtered_lat_limits = raw_lat_limits
         else:
             self.filtered_lat_limits = (LPF_ALPHA * raw_lat_limits) + \
                                        ((1.0 - LPF_ALPHA) * self.filtered_lat_limits)
-        
+
         current_lat_limits = np.maximum(self.filtered_lat_limits, 1.0)
-        
+
         v_clip = np.clip(v_pred, 1.0, 100.0)
         curvatures = np.abs(yaw_rates / v_clip)
-        
+
         safe_speeds_model = np.sqrt(current_lat_limits / (curvatures + 1e-6)) * SAFETY_SPEED_FACTOR
 
         final_safe_speeds = safe_speeds_model.copy()
@@ -155,7 +155,7 @@ class DTSC:
         if abs_steer > STEER_ASSIST_ANGLE_THRESHOLD and steer_ratio > 0 and wheelbase > 0:
             steer_rad = np.radians(abs_steer)
             steer_curvature = steer_rad / (steer_ratio * wheelbase)
-            
+
             if steer_curvature > 1e-6:
                 lat_acc_limit_steer = current_lat_limits
                 raw_safe_speed_steer = np.sqrt(lat_acc_limit_steer / steer_curvature)
@@ -174,19 +174,19 @@ class DTSC:
             decel_city = 0.0
         else:
             decel_city = interp_clamped(predicted_lat_acc_max, CITY_DECEL_BP, CITY_DECEL_V)
-            
+
         # 2. 計算 Highway 模式煞車值
         if predicted_lat_acc_max <= HIGHWAY_DECEL_BP[0]:
             decel_hwy = 0.0
         else:
             decel_hwy = interp_clamped(predicted_lat_acc_max, HIGHWAY_DECEL_BP, HIGHWAY_DECEL_V)
-            
+
         # 3. 計算混合權重 (18.0 m/s ~ 19.5 m/s)
         blend_factor = np.interp(v_ego, TRANSITION_BP, TRANSITION_VALS)
-        
+
         # 4. 線性混合
         final_decel = (decel_city * (1.0 - blend_factor)) + (decel_hwy * blend_factor)
-        
+
         return clamp(final_decel, EMERGENCY_DECEL, 0.0)
 
     def _compute_dtsc_decel(self, v_ego, v_pred, rel_pos, safe_speeds):
@@ -215,7 +215,7 @@ class DTSC:
                             wheelbase=None):
         current_steer_ratio = steer_ratio if steer_ratio is not None else self.steer_ratio
         current_wheelbase = wheelbase if wheelbase is not None else self.wheelbase
-        
+
         horizon_len = len(T_IDXS_MPC)
         a_min = np.ones(horizon_len) * (base_a_min if np.isscalar(base_a_min) else base_a_min[0])
         a_max = np.array(base_a_max) if not np.isscalar(base_a_max) else np.ones(horizon_len) * base_a_max
@@ -241,7 +241,7 @@ class DTSC:
         mask_curve = curvatures > CURVATURE_MIN_FOR_PERSIST
         mask_speed = speed_excess > 0.01
         mask = np.logical_and(mask_speed, mask_curve)
-        
+
         frac_problem = float(np.sum(mask)) / len(mask) if len(mask) > 0 else 0
         persistence_ok = frac_problem >= PERSISTENCE_MIN_FRAC
         critical_dist = rel_pos[critical_idx] if critical_idx is not None else 999.0
@@ -262,7 +262,7 @@ class DTSC:
             sp = min(sp_decel, 0.0)
             dt = min(dt_decel, 0.0)
             final_required_decel = min(sp, dt)
-        
+
         final_required_decel = clamp(final_required_decel, EMERGENCY_DECEL, 0.0)
 
         if final_required_decel < -0.1:
