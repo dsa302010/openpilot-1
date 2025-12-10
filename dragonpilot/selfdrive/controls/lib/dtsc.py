@@ -34,7 +34,7 @@ LAT_LIMIT_V  = [2.0, 2.0, 2.4, 2.7, 2.8]
 LPF_ALPHA = 0.3
 
 # --- 雙模組 Pre-deceleration 設定 ---
-# 1. 市區激進版 (City / Alley): 0.5G 就開始煞
+# 1. 市區激進版 (City / Alley): 0.8G 就開始煞
 CITY_DECEL_BP = np.array([0.8, 1.0, 2.0])
 CITY_DECEL_V  = np.array([-0.8, -2.0, -3.5])
 
