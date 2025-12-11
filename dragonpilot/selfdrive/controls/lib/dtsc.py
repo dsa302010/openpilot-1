@@ -1,10 +1,5 @@
 """
 Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v9.4)
-基於 v9.3 修改:
-1. [參數] 市區預煞門檻提升至 0.8 m/s² (原 0.5)，減少直路誤煞，行駛更滑順
-2. [參數] 高速最大煞車力道增強至 -1.8 m/s² (原 -1.5)，增加大彎信心
-3. [繼承] 包含 54~72 km/h 平滑過渡、語法修復、CarParams 支援
-
 Tuned for: Smoother City Cruising & Confident Highway Turns
 """
 
@@ -31,15 +26,15 @@ LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8]
 LPF_ALPHA = 0.3
 
 # --- 雙模組 Pre-deceleration 設定 ---
-# 1. 市區激進版 (City): 門檻提高至 0.8，減少誤煞
+# 1. 市區激進版 (City):
 CITY_DECEL_BP = np.array([0.8, 1.0, 2.0])
 CITY_DECEL_V  = np.array([-0.8, -2.0, -3.5])
 
-# 2. 高速溫和版 (Highway): 最大力道增強至 -1.8
+# 2. 高速溫和版 (Highway):
 HIGHWAY_DECEL_BP = np.array([1.3, 1.8, 2.5])
 HIGHWAY_DECEL_V  = np.array([-0.3, -0.8, -1.8])
 
-# [關鍵修改] 定義過渡區間 (Transition Zone)
+# 定義過渡區間 (Transition Zone)
 # 為了避免 60km/h 路段過度減速，將混合區間設為 54~72 km/h
 # 15.0 m/s = 54 km/h (開始混合)
 # 20.0 m/s = 72 km/h (完全高速)
@@ -54,7 +49,7 @@ EMERGENCY_DECEL   = -4.5
 MIN_CURVE_DISTANCE = 5.0
 
 # MAX_EXIT_ACCEL
-MAX_EXIT_ACCEL = 0.7
+MAX_EXIT_ACCEL = 0.5
 
 # --- 舵角輔助參數 ---
 STEER_ASSIST_ANGLE_THRESHOLD = 20.0
@@ -62,7 +57,7 @@ STEER_SPEED_SCALE = 1.0
 STEER_AGGRESSIVENESS = 1.0
 MIN_STEER_SPEED_FLOOR = 5.0
 
-# --- SCC-V 誤判防護 ---
+# --- 巷道誤判防護 ---
 PERSISTENCE_MIN_FRAC = 0.5
 CURVATURE_MIN_FOR_PERSIST = 0.01
 SHORT_DIST_IGNORE = 3.5
@@ -91,14 +86,12 @@ def interp_clamped(x, bp, fp):
 # DTSC 主類別
 # =============================
 class DTSC:
-    # [新增] cp=None 參數，支援自動讀取
     def __init__(self, aggressiveness=1.0, cp=None):
         self.aggressiveness = clamp(aggressiveness, 0.5, 1.8)
         self.active = False
         self.hysteresis_timer = 0.0
         self.filtered_lat_limits = None
         
-        # [邏輯檢查] 自動讀取 CP
         if cp is not None:
             self.steer_ratio = cp.steerRatio
             self.wheelbase = cp.wheelbase
@@ -160,7 +153,6 @@ class DTSC:
                 lat_acc_limit_steer = current_lat_limits
                 raw_safe_speed_steer = np.sqrt(lat_acc_limit_steer / steer_curvature)
                 safe_speed_steer_val = raw_safe_speed_steer * SAFETY_SPEED_FACTOR * STEER_SPEED_SCALE
-                # [標準設定] 5.0 m/s
                 safe_speed_steer_val = np.maximum(safe_speed_steer_val, MIN_STEER_SPEED_FLOOR)
                 final_safe_speeds = np.minimum(safe_speeds_model, safe_speed_steer_val)
 
@@ -250,7 +242,6 @@ class DTSC:
         if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
             dt_decel = sp_decel = 0.0
             dt_mode = None
-        # [語法修復] 合併為單行，確保不崩潰
         elif not persistence_ok and critical_dist < SHORT_DIST_IGNORE:
             if abs(steer_angle_deg) < STEER_ANGLE_FOR_SHORT:
                 dt_decel = sp_decel = 0.0
