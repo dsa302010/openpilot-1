@@ -354,7 +354,8 @@ void DPPanel::add_device_toggles() {
       has_toggle = true;
       continue;
     }
-    if ((param == "dp_device_is_rhd" || param == "dp_device_monitoring_disabled" || param == "dp_device_beep") && !lite) {
+    // FIX: Removed "dp_device_is_rhd" from this check so everyone can use it
+    if ((param == "dp_device_monitoring_disabled" || param == "dp_device_beep") && !lite) {
       continue;
     }
 
@@ -408,6 +409,12 @@ DPPanel::DPPanel(SettingsWindow *parent) : ListWidget(parent) {
   addItem(resetBtn);
 
   fs_watch = new ParamWatcher(this);
+  
+  // FIX: Moved parameter registration to Constructor to avoid duplicates
+  fs_watch->addParam("dp_lat_lca_speed");
+  fs_watch->addParam("dp_lon_ext_radar");
+  fs_watch->addParam("dp_lon_acm");
+
   QObject::connect(fs_watch, &ParamWatcher::paramChanged, [=](const QString &param_name, const QString &param_value) {
     updateStates();
   });
@@ -425,10 +432,7 @@ void DPPanel::showEvent(QShowEvent *event) {
 }
 
 void DPPanel::updateStates() {
-  // do fs_watch here
-  fs_watch->addParam("dp_lat_lca_speed");
-  fs_watch->addParam("dp_lon_ext_radar");
-  fs_watch->addParam("dp_lon_acm");
+  // FIX: Removed fs_watch->addParam calls from here
 
   if (!isVisible()) {
     return;
