@@ -1,5 +1,5 @@
 """
-Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v9.4)
+Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v9.5)
 Tuned for: Smoother City Cruising & Confident Highway Turns
 """
 
@@ -26,20 +26,15 @@ LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8]
 LPF_ALPHA = 0.3
 
 # --- 雙模組 Pre-deceleration 設定 ---
-# 1. 市區激進版 (City):
 CITY_DECEL_BP = np.array([0.8, 1.0, 2.0])
 CITY_DECEL_V  = np.array([-0.8, -2.0, -3.5])
 
-# 2. 高速溫和版 (Highway):
 HIGHWAY_DECEL_BP = np.array([1.3, 1.8, 2.5])
 HIGHWAY_DECEL_V  = np.array([-0.3, -0.8, -1.8])
 
 # 定義過渡區間 (Transition Zone)
-# 為了避免 60km/h 路段過度減速，將混合區間設為 54~72 km/h
-# 15.0 m/s = 54 km/h (開始混合)
-# 20.0 m/s = 72 km/h (完全高速)
 TRANSITION_BP = [15.0, 20.0]
-TRANSITION_VALS = [0.0, 1.0]  # 0.0=全市區, 1.0=全高速
+TRANSITION_VALS = [0.0, 1.0]
 
 # --- 減速度限制 ---
 MAX_COMFORT_DECEL = -2.0
@@ -95,13 +90,13 @@ class DTSC:
         if cp is not None:
             self.steer_ratio = cp.steerRatio
             self.wheelbase = cp.wheelbase
-            cloudlog.info(f"DTSC v9.4: Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
+            cloudlog.info(f"DTSC v9.5: Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
         else:
             self.steer_ratio = 14.3
             self.wheelbase = 2.7
-            cloudlog.warning("DTSC v9.4: Warning! Using hardcoded params.")
+            cloudlog.warning("DTSC v9.5: Warning! Using hardcoded params.")
         
-        cloudlog.info(f"DTSC v9.4: Init. Blend Range: {TRANSITION_BP[0]}-{TRANSITION_BP[1]} m/s")
+        cloudlog.info(f"DTSC v9.5: Init. Blend Range: {TRANSITION_BP[0]}-{TRANSITION_BP[1]} m/s")
 
     def set_aggressiveness(self, value):
         self.aggressiveness = clamp(value, 0.5, 1.8)
@@ -159,9 +154,6 @@ class DTSC:
         return final_safe_speeds, curvatures
 
     def _compute_sp_decel(self, predicted_lat_acc_max, v_ego):
-        """
-        [智慧混合邏輯] 54~72 km/h 線性過渡
-        """
         # City Mode Calc
         if predicted_lat_acc_max <= CITY_DECEL_BP[0]:
             decel_city = 0.0
@@ -178,6 +170,11 @@ class DTSC:
         blend_factor = np.interp(v_ego, TRANSITION_BP, TRANSITION_VALS)
         final_decel = (decel_city * (1.0 - blend_factor)) + (decel_hwy * blend_factor)
         
+        # [Clouda Suggestion] 增加過渡區間調試日誌
+        # 為了減少 Log 垃圾量，只在過渡區間且有減速需求時紀錄
+        # if TRANSITION_BP[0] <= v_ego <= TRANSITION_BP[1] and final_decel < -0.5:
+        #    cloudlog.debug(f"DTSC Mix: v={v_ego:.1f}, blend={blend_factor:.2f}, city={decel_city:.2f}, hwy={decel_hwy:.2f}")
+
         return clamp(final_decel, EMERGENCY_DECEL, 0.0)
 
     def _compute_dtsc_decel(self, v_ego, v_pred, rel_pos, safe_speeds):
@@ -204,7 +201,6 @@ class DTSC:
                             steer_angle_deg=0.0,
                             steer_ratio=None, 
                             wheelbase=None):
-        # [邏輯優化] 優先使用傳入的參數，否則使用初始化時讀取的 CP
         current_steer_ratio = steer_ratio if steer_ratio is not None else self.steer_ratio
         current_wheelbase = wheelbase if wheelbase is not None else self.wheelbase
         
@@ -226,7 +222,6 @@ class DTSC:
         safe_speeds, curvatures = self._compute_safe_speeds(
             v_pred, yaw_rates, steer_angle_deg, current_steer_ratio, current_wheelbase)
 
-        # [傳入 v_ego] 啟用平滑過渡
         sp_decel = self._compute_sp_decel(predicted_lat_acc_max, v_ego)
         dt_decel, critical_idx, dt_mode = self._compute_dtsc_decel(v_ego, v_pred, rel_pos, safe_speeds)
 
@@ -281,6 +276,8 @@ class DTSC:
             for i in range(horizon_len):
                 if rel_pos[i] <= critical_distance + 1e-6:
                     if pass_decel < 0:
+                        # [注意] 這裡維持修改 a_max，因為我們需要"強制減速"。
+                        # Clouda 擔心的"無解"問題會在 longitudinal_planner 裡面的 Solver Safeguard 處理
                         a_max[i] = min(a_max[i], pass_decel)
                 else:
                     if has_future_curve:
