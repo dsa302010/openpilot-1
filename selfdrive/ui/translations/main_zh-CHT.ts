@@ -240,10 +240,11 @@ DOES NOT WORK with Experimental Mode enabled.</source>
         <source>Dynamic Turn Speed Control (DTSC)</source>
         <translation>動態轉彎速度控制 (DTSC)</translation>
     </message>
-    <message>
-        <source>Road curvature and grip conditions.\nOriginally from the openpilot TACO.</source>
+<message>
+        <source>Road curvature and grip conditions.
+Originally from the openpilot TACO.</source>
         <translation>會根據即將到來的道路曲率和抓地力條件自動調整車輛的預測速度。
-    最初來自 openpilot TACO分支。</translation>
+最初來自 openpilot TACO分支。</translation>
     </message>
     <message>
         <source>UI</source>
