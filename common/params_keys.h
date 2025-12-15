@@ -148,6 +148,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"dp_lon_acm", {PERSISTENT, BOOL, "0"}},
     {"dp_lon_aem", {PERSISTENT, BOOL, "0"}},
     {"dp_lon_dtsc", {PERSISTENT, BOOL, "0"}},
+    {"dp_lon_scda", {PERSISTENT, BOOL, "0"}},
     {"dp_device_audible_alert_mode", {PERSISTENT, INT, "0"}},
     {"dp_device_auto_shutdown_in", {PERSISTENT, INT, "-5"}},
     {"dp_ui_radar_tracks", {PERSISTENT, BOOL, "0"}},
