@@ -203,7 +203,12 @@ void DPPanel::add_longitudinal_toggles() {
       "dp_lon_dtsc",
       QString::fromUtf8("🐉 ") + tr("Dynamic Turn Speed Control (DTSC)"),
       tr("Road curvature and grip conditions.\nOriginally from the openpilot TACO."),
-    },    
+    },
+    {
+      "dp_lon_scda",
+      QString::fromUtf8("🐉 ") + tr("Speed Camera Deceleration Assist (SCDA)"),
+      tr("Automatically reduce speed when approaching speed cameras."),
+    },
   };
 
   QWidget *label = nullptr;
@@ -218,15 +223,11 @@ void DPPanel::add_longitudinal_toggles() {
     if (param == "dp_lon_ext_radar" && !vehicle_has_radar_unavailable) {
       continue;
     }
-    if (param == "dp_lon_acm" && !vehicle_has_long_ctrl) {
-      continue;
-    }
-    if (param == "dp_lon_aem" && !vehicle_has_long_ctrl) {
-      continue;
-    }
-    if (param == "dp_lon_dtsc" && !vehicle_has_long_ctrl) {
-      continue;
-    }
+    // [MODIFIED] Checks removed to force show these toggles
+    // if (param == "dp_lon_acm" && !vehicle_has_long_ctrl) { continue; }
+    // if (param == "dp_lon_aem" && !vehicle_has_long_ctrl) { continue; }
+    // if (param == "dp_lon_dtsc" && !vehicle_has_long_ctrl) { continue; }
+    // if (param == "dp_scda" && !vehicle_has_long_ctrl) { continue; }
 
     has_toggle = true;
     auto toggle = new ParamControl(param, title, desc, "", this);
@@ -354,8 +355,7 @@ void DPPanel::add_device_toggles() {
       has_toggle = true;
       continue;
     }
-    // FIX: Removed "dp_device_is_rhd" from this check so everyone can use it
-    if ((param == "dp_device_monitoring_disabled" || param == "dp_device_beep") && !lite) {
+    if ((param == "dp_device_is_rhd" || param == "dp_device_monitoring_disabled" || param == "dp_device_beep") && !lite) {
       continue;
     }
 
@@ -410,10 +410,13 @@ DPPanel::DPPanel(SettingsWindow *parent) : ListWidget(parent) {
 
   fs_watch = new ParamWatcher(this);
   
-  // FIX: Moved parameter registration to Constructor to avoid duplicates
+  // [MODIFIED] Added params here to register them once, avoiding repeat calls in updateStates
   fs_watch->addParam("dp_lat_lca_speed");
   fs_watch->addParam("dp_lon_ext_radar");
   fs_watch->addParam("dp_lon_acm");
+  fs_watch->addParam("dp_lon_aem");
+  fs_watch->addParam("dp_lon_dtsc");
+  fs_watch->addParam("dp_scda");
 
   QObject::connect(fs_watch, &ParamWatcher::paramChanged, [=](const QString &param_name, const QString &param_value) {
     updateStates();
@@ -432,8 +435,8 @@ void DPPanel::showEvent(QShowEvent *event) {
 }
 
 void DPPanel::updateStates() {
-  // FIX: Removed fs_watch->addParam calls from here
-
+  // [MODIFIED] fs_watch->addParam calls removed from here for performance.
+  
   if (!isVisible()) {
     return;
   }
