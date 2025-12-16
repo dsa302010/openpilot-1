@@ -14,7 +14,7 @@ class SpeedCameraControl:
   def __init__(self):
     self.cameras = np.empty((0, 3))
     
-    # [修改點 1] 調整角度參數
+    # 調整角度參數
     # 0-60km/h 用 20度，80km/h 以上用 15度
     self.angle_bp = [0., 60., 80.]
     self.angle_vals = [20., 20., 15.]
@@ -55,11 +55,24 @@ class SpeedCameraControl:
         reader = csv.DictReader(f)
         for r in reader:
           try:
-            cams.append([float(r['Latitude']), float(r['Longitude']), float(r['Limit'])])
+            # [修正] 相容大小寫不同 (同時嘗試讀取 Latitude/latitude, Limit/limit)
+            lat = r.get('Latitude') or r.get('latitude')
+            lon = r.get('Longitude') or r.get('longitude')
+            spd = r.get('Limit') or r.get('limit')
+            
+            # 確保欄位都有值才處理
+            if lat and lon and spd:
+                cams.append([float(lat), float(lon), float(spd)])
           except ValueError:
+            # 跳過非數字的行 (例如中文說明行 "速限")
             continue
+            
       self.cameras = np.asarray(cams)
-      cloudlog.warning(f"SCDA: CSV 讀取成功，共載入 {len(self.cameras)} 支相機。")
+      if len(self.cameras) > 0:
+          cloudlog.warning(f"SCDA: CSV 讀取成功，共載入 {len(self.cameras)} 支相機。")
+      else:
+          cloudlog.warning("SCDA: CSV 讀取完成但沒有有效資料 (請檢查欄位名稱)。")
+          
     except Exception as e:
       cloudlog.error(f"SCDA: 讀取失敗 - {e}")
       self.cameras = np.empty((0, 3))
@@ -108,7 +121,7 @@ class SpeedCameraControl:
     if nearby_cams.size == 0:
       return v_cruise_ms
 
-    # 用於 Log 的變數 (只記錄最近的一支)
+    # 用於 Log 的變數
     closest_log_info = None 
     min_dist_found = 9999.0
 
@@ -119,10 +132,8 @@ class SpeedCameraControl:
       if dist > search_radius:
         continue
 
-      # 記錄最近的相機資訊供除錯
       if dist < min_dist_found:
         min_dist_found = dist
-        # 先暫存基本資訊，後面檢查通過與否再更新狀態
         closest_log_info = {
             "dist": dist, 
             "limit": cam_limit, 
@@ -175,18 +186,16 @@ class SpeedCameraControl:
     final_target_kph = min(candidates)
     final_target_kph = min(final_target_kph, v_cruise_kph)
 
-    # --- 中文 Log 輸出區塊 (每秒一次) ---
+    # --- 中文 Log 輸出區塊 ---
     if should_log and closest_log_info and closest_log_info["dist"] < 500:
         self.last_log_time = current_time
         status = closest_log_info["status"]
         limit = closest_log_info["limit"]
         dist = closest_log_info["dist"]
         
-        # 如果正在介入 (目標速度 < 巡航速度)
         if final_target_kph < v_cruise_kph - 1.0:
              cloudlog.warning(f"SCDA 介入: 限速{limit:.0f} | 距離{dist:.0f}m | 目標{final_target_kph:.1f}kph")
         
-        # 如果被忽略 (角度或速差) 且距離很近 (<300m) 才顯示警告，方便除錯
         elif status in ["角度過大", "速差過大(防急煞)"] and dist < 300:
             diff = closest_log_info.get("angle_diff", 0)
             allowed = closest_log_info.get("allowed_angle", 0)
@@ -194,9 +203,5 @@ class SpeedCameraControl:
                 cloudlog.warning(f"SCDA 忽略: 角度{diff:.1f}° > 允許{allowed:.1f}° (距離{dist:.0f}m)")
             else:
                 cloudlog.warning(f"SCDA 忽略: 速差過大 (車速{v_ego_kph:.0f} > 限速{limit:.0f}+20)")
-        
-        # 正常待命中 (除錯用，可視情況開啟，目前設為 info)
-        # else:
-        #    cloudlog.info(f"SCDA 待命: 最近相機 {dist:.0f}m (限速{limit})")
 
     return final_target_kph * KPH_TO_MS
