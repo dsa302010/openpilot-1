@@ -14,23 +14,23 @@ class SpeedCameraControl:
   def __init__(self):
     self.cameras = np.empty((0, 3))
     
-    # 調整角度參數
-    # 0-60km/h 用 20度，80km/h 以上用 15度
+    # 調整角度參數：0-60km/h 用 20度，80km/h 以上用 15度
     self.angle_bp = [0., 60., 80.]
     self.angle_vals = [20., 20., 15.]
     
-    # deceleration start radius (meters)
-    self.limit_radius_bp = [0., 40., 60., 80., 105.]
-    self.limit_radius_vals = [100., 100., 100., 150., 200.]
+    # 減速啟動半徑 (meters)：針對台灣高速公路優化
+    # 時速 110km/h 對應 300 公尺，提供更平滑的減速段差
+    self.limit_radius_bp = [0., 40., 60., 80., 105., 110.]
+    self.limit_radius_vals = [100., 100., 100., 150., 200., 300.]
     
-    # search radius (meters)
-    self.search_bp = [0., 79., 80.]
-    self.search_vals = [500., 500., 500.]
+    # 搜尋半徑 (meters)：確保在減速點前就能偵測到相機
+    self.search_bp = [0., 79., 105.]
+    self.search_vals = [500., 500., 600.]
     
-    self.center_hold_dist = 20.0
+    self.center_hold_dist = 20.0 # 抵達相機前 20 公尺維持限速
     
     self.last_load_time = 0.0
-    self.last_log_time = 0.0 # 用於限制 Log 輸出頻率
+    self.last_log_time = 0.0 
     self._load_cameras()
 
   def _load_cameras(self):
@@ -55,23 +55,18 @@ class SpeedCameraControl:
         reader = csv.DictReader(f)
         for r in reader:
           try:
-            # [修正] 相容大小寫不同 (同時嘗試讀取 Latitude/latitude, Limit/limit)
             lat = r.get('Latitude') or r.get('latitude')
             lon = r.get('Longitude') or r.get('longitude')
             spd = r.get('Limit') or r.get('limit')
             
-            # 確保欄位都有值才處理
             if lat and lon and spd:
                 cams.append([float(lat), float(lon), float(spd)])
           except ValueError:
-            # 跳過非數字的行 (例如中文說明行 "速限")
             continue
             
       self.cameras = np.asarray(cams)
       if len(self.cameras) > 0:
-          cloudlog.warning(f"SCDA: CSV 讀取成功，共載入 {len(self.cameras)} 支相機。")
-      else:
-          cloudlog.warning("SCDA: CSV 讀取完成但沒有有效資料 (請檢查欄位名稱)。")
+          cloudlog.warning(f"SCDA: 載入成功，共 {len(self.cameras)} 支相機。")
           
     except Exception as e:
       cloudlog.error(f"SCDA: 讀取失敗 - {e}")
@@ -94,12 +89,11 @@ class SpeedCameraControl:
     return (math.degrees(math.atan2(y, x)) + 360) % 360
 
   def get_target_speed(self, v_ego_ms, v_cruise_ms, lat, lon, bearing_deg):
-    # 基礎輸入檢查
     if not math.isfinite(v_ego_ms) or not math.isfinite(lat) or not math.isfinite(lon):
       return v_cruise_ms
 
     current_time = time.monotonic()
-    should_log = (current_time - self.last_log_time) > 1.0  # 每1秒只紀錄一次 Log
+    should_log = (current_time - self.last_log_time) > 1.0
 
     v_ego_kph = v_ego_ms * MS_TO_KPH
     v_cruise_kph = v_cruise_ms * MS_TO_KPH
@@ -109,11 +103,12 @@ class SpeedCameraControl:
     if self.cameras.size == 0:
       return v_cruise_ms
 
+    # 動態參數計算
     search_radius = np.interp(v_ego_kph, self.search_bp, self.search_vals)
     limit_radius = np.interp(v_ego_kph, self.limit_radius_bp, self.limit_radius_vals)
     base_angle = np.interp(v_ego_kph, self.angle_bp, self.angle_vals)
 
-    # 快速過濾
+    # 範圍過濾
     deg_diff = (search_radius / 111000) * 1.5
     mask = (np.abs(self.cameras[:, 0] - lat) < deg_diff) & (np.abs(self.cameras[:, 1] - lon) < deg_diff)
     nearby_cams = self.cameras[mask]
@@ -121,87 +116,67 @@ class SpeedCameraControl:
     if nearby_cams.size == 0:
       return v_cruise_ms
 
-    # 用於 Log 的變數
     closest_log_info = None 
     min_dist_found = 9999.0
 
     for cam in nearby_cams:
       cam_lat, cam_lon, cam_limit = cam
-      
       dist = self._haversine(lat, lon, cam_lat, cam_lon)
+      
       if dist > search_radius:
         continue
 
-      if dist < min_dist_found:
-        min_dist_found = dist
-        closest_log_info = {
-            "dist": dist, 
-            "limit": cam_limit, 
-            "status": "檢查中", 
-            "angle_diff": 0.0,
-            "allowed_angle": 0.0
-        }
-
-      # 視角優化：遠窄近寬
-      allowed_angle = 15.0 if dist > 150 else base_angle
-      
-      if closest_log_info and dist == min_dist_found:
-          closest_log_info["allowed_angle"] = allowed_angle
-
+      # 視角計算
+      allowed_angle = 20.0 if dist > 150 else base_angle
       if math.isnan(bearing_deg): continue
       
       cam_bearing = self._bearing(lat, lon, cam_lat, cam_lon)
       diff_angle = abs(bearing_deg - cam_bearing)
       if diff_angle > 180: diff_angle = 360 - diff_angle
       
-      if closest_log_info and dist == min_dist_found:
-          closest_log_info["angle_diff"] = diff_angle
-
-      if diff_angle > allowed_angle:
-        if closest_log_info and dist == min_dist_found:
-            closest_log_info["status"] = "角度過大"
+      # 判定前方或後方
+      is_front = diff_angle <= allowed_angle
+      is_behind = (180 - diff_angle) <= allowed_angle
+      
+      # 修改：允許通過後在 limit_radius 內繼續追蹤，達成緩加速
+      if not (is_front or (is_behind and dist < limit_radius)):
         continue
 
-      # 安全檢查：防止急煞
+      # 安全門檻：維持原本的 +20 邏輯，防止資料誤植導致急煞
       if v_ego_kph > cam_limit + 20:
-        if closest_log_info and dist == min_dist_found:
-            closest_log_info["status"] = "速差過大(防急煞)"
+        if dist < min_dist_found:
+            closest_log_info = {"status": "速差過大(防急煞)", "dist": dist, "limit": cam_limit}
         continue
 
       # 計算目標速度
       if dist > limit_radius:
         target = v_cruise_kph
-        if closest_log_info and dist == min_dist_found:
-            closest_log_info["status"] = "待命(距離外)"
       else:
+        # 使用線性插值，在 20m 到 limit_radius 之間平滑變動
         target = np.interp(dist, [self.center_hold_dist, limit_radius], [cam_limit, v_cruise_kph])
-        if closest_log_info and dist == min_dist_found:
-            closest_log_info["status"] = "介入中"
-            closest_log_info["target"] = target
       
       if math.isfinite(target):
         candidates.append(target)
+        if dist < min_dist_found:
+            min_dist_found = dist
+            closest_log_info = {
+                "dist": dist, 
+                "limit": cam_limit, 
+                "status": "介入中" if is_front else "緩回速中",
+                "target": target
+            }
 
     # 決策：取最小值
     final_target_kph = min(candidates)
     final_target_kph = min(final_target_kph, v_cruise_kph)
 
-    # --- 中文 Log 輸出區塊 ---
-    if should_log and closest_log_info and closest_log_info["dist"] < 500:
+    # --- Log 輸出 ---
+    if should_log and closest_log_info and closest_log_info["dist"] < search_radius:
         self.last_log_time = current_time
         status = closest_log_info["status"]
         limit = closest_log_info["limit"]
         dist = closest_log_info["dist"]
-        
         if final_target_kph < v_cruise_kph - 1.0:
-             cloudlog.warning(f"SCDA 介入: 限速{limit:.0f} | 距離{dist:.0f}m | 目標{final_target_kph:.1f}kph")
-        
-        elif status in ["角度過大", "速差過大(防急煞)"] and dist < 300:
-            diff = closest_log_info.get("angle_diff", 0)
-            allowed = closest_log_info.get("allowed_angle", 0)
-            if status == "角度過大":
-                cloudlog.warning(f"SCDA 忽略: 角度{diff:.1f}° > 允許{allowed:.1f}° (距離{dist:.0f}m)")
-            else:
-                cloudlog.warning(f"SCDA 忽略: 速差過大 (車速{v_ego_kph:.0f} > 限速{limit:.0f}+20)")
+             cloudlog.warning(f"SCDA {status}: 限速{limit:.0f} | 距離{dist:.0f}m | 目標{final_target_kph:.1f}kph")
 
     return final_target_kph * KPH_TO_MS
