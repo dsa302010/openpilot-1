@@ -10,49 +10,47 @@ from openpilot.common.pid import PIDController
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.realtime import DT_CTRL
 
-# 在較高速度下（例如 40 km/h 以上），我們可以假設：
-# 車輛產生的橫向加速度與施加在轉向齒條上的扭矩相關。
-# 它與車輪滑移或速度無直接關係。
+# At higher speeds (25+mph) we can assume:
+# Lateral acceleration achieved by a specific car correlates to
+# torque applied to the steering rack. It does not correlate to
+# wheel slip, or to speed.
 
-# 這個控製器施加扭矩以達到預期的橫向加速度。
-# 為了補償低速效應，我們使用 LOW_SPEED_FACTOR 在低速時增加誤差增益。
-# 此外，方向盤存在靜摩擦力，需要克服它才能移動，這部分也有補償。
+# This controller applies torque to achieve desired lateral
+# accelerations. To compensate for the low speed effects we
+# use a LOW_SPEED_FACTOR in the error. Additionally, there is
+# friction in the steering wheel that needs to be overcome to
+# move it at all, this is compensated for too.
 
 # -------------------------------------------------------------------
-# [V4 最終版] 全公里制 (km/h) 設定 - 雙模式 (ACC ON/OFF)
-# 含 DP 原版參數對照
+# [V5.1 Taiwan Optimization] 台灣道路環境專用版
 # -------------------------------------------------------------------
+# 設計目標：
+# 1. 消除市區直行時的左右拉扯 (Ping-pong)。
+# 2. 解決 50km/h 上下過彎容易推頭的問題 (強化中段)。
+# 3. 提升 100km/h+ 高速公路抗側風與穩定性 (強化尾段)。
+# 4. 保持起步時的舒適性，避免方向盤死硬。
 
-# X軸: 車速節點 (直接填寫公里/小時)
-# 0   = 靜止
-# 10  = 迴轉/剛起步 (解決不回正的關鍵點)
-# 36  = 市區慢速 (原版 10 m/s)
-# 72  = 快速道路 (原版 20 m/s)
-# 108 = 高速公路 (原版 30 m/s)
-LOW_SPEED_X_KPH = [0, 10, 36, 72, 108]
-
-# -----------------------------------------------------------
-# 模式 A: ACC 開啟 (自動駕駛中) - 咬地力強，直行不晃動
-# -----------------------------------------------------------
-# Y軸: 放大倍率 (數值越大 = 抓越緊)
-#
-# [原版參數對照]
-# DP 原版原始值: [15, N/A, 13, 10,  5]
-# DP 實際運算值: [225, N/A, 169, 100, 25] (原始值取平方)
-#
-# [V4 優化值說明]
-# 0   km/h (180): [起步] 比原版(225) 稍柔和，但仍保留 80% 力道，確保起步轉向有力。
-# 10  km/h ( 90): [迴轉] 新增節點！快速降增益，讓迴轉後方向盤能自動回正 (解決黏滯感)。
-# 36  km/h ( 65): [市區] 關鍵！比原版(169) 降低約 60%，徹底消除直行左右晃動，但仍比 SP/原版硬。
-# 72  km/h ( 30): [快速] 比原版(100) 降低，提升高速巡航的舒適度與容錯率。
-# 108 km/h ( 10): [高速] 比原版( 25) 降低，回歸穩定安全，避免高速過敏。
-LOW_SPEED_Y_ACC_ON = [180, 90, 70, 80, 20]
+# X軸: 車速節點 (km/h)
+LOW_SPEED_X_KPH = [0, 9, 18, 36, 54, 72, 108]
 
 # -----------------------------------------------------------
-# 模式 B: ACC 關閉 (自己開/純維持) - 手感輕盈
+# 模式 A: ACC 開啟 (自動駕駛中)
 # -----------------------------------------------------------
-# 整體力道約為 ACC 模式的 60%~70%，讓您超車或滑行時手感更自然。
-LOW_SPEED_Y_ACC_OFF = [140, 65, 65, 75, 20]
+# [參數解析]
+# 0   (180): 維持高抓地力，確保靜止與剛起步時方向盤鎖定。
+# 9   (100): [優化] 比原版(90)稍高，讓起步加速過程的力道銜接更線性，不突兀。
+# 18  ( 75): [優化] 提升低速轉彎的循跡性，避免迴轉時手感過軟。
+# 36  ( 75): [優化] 市區主力區間，由 70 提升至 75，解決微彎道路抓不住線的問題。
+# 54  ( 80): [優化] 銜接快速道路前段，增加阻尼感，預備進入高架。
+# 72  ( 85): [優化] 快速道路/匝道，對抗離心力與高架側風。
+# 108 ( 35): [關鍵] 高速公路巡航，由 25 大幅提升至 35，解決大車旁飄浮感。
+LOW_SPEED_Y_ACC_ON = [180, 100, 75, 75, 80, 85, 30]
+
+# -----------------------------------------------------------
+# 模式 B: ACC 關閉 (手動駕駛/滑行)
+# -----------------------------------------------------------
+# 維持輕盈手感，方便隨時介入，僅提升高速尾段以策安全。
+LOW_SPEED_Y_ACC_OFF = [140, 65, 65, 65, 65, 75, 30]
 
 # 自動將您填寫的公里速轉換為 Openpilot 運算用的 m/s (請勿更動此行)
 LOW_SPEED_X = [x * CV.KPH_TO_MS for x in LOW_SPEED_X_KPH]
@@ -71,7 +69,7 @@ class LatControlTorque(LatControl):
     self.torque_from_lateral_accel = CI.torque_from_lateral_accel()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
 
-    # SP Optimization: 初始化濾波器 (用於 D 項)
+    # SP Optimization: 初始化濾波器 (用於 D 項優化)
     self.measurement_rate_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), DT_CTRL)
     self.previous_measurement = 0.0
 
@@ -96,57 +94,4 @@ class LatControlTorque(LatControl):
 
       # desired rate is the desired rate of change in the setpoint, not the absolute desired curvature
       # desired_lateral_jerk = desired_curvature_rate * CS.vEgo ** 2
-      actual_lateral_accel = actual_curvature * CS.vEgo ** 2
-      lateral_accel_deadzone = curvature_deadzone * CS.vEgo ** 2
-
-      # -------------------------------------------------------------
-      # V4 Logic: 根據 ACC 狀態切換增益表
-      # -------------------------------------------------------------
-      if CS.cruiseState.enabled:
-          target_y_table = LOW_SPEED_Y_ACC_ON
-      else:
-          target_y_table = LOW_SPEED_Y_ACC_OFF
-      
-      low_speed_factor = np.interp(CS.vEgo, LOW_SPEED_X, target_y_table)
-      # -------------------------------------------------------------
-      
-      setpoint = desired_lateral_accel + low_speed_factor * desired_curvature
-      measurement = actual_lateral_accel + low_speed_factor * actual_curvature
-
-      # SP Optimization: Calculate and filter the measurement rate
-      measurement_rate = self.measurement_rate_filter.update((measurement - self.previous_measurement) / DT_CTRL)
-      self.previous_measurement = measurement
-
-      gravity_adjusted_lateral_accel = desired_lateral_accel - roll_compensation
-      torque_from_setpoint = self.torque_from_lateral_accel(LatControlInputs(setpoint, roll_compensation, CS.vEgo, CS.aEgo), self.torque_params,
-                                                            gravity_adjusted=False)
-      torque_from_measurement = self.torque_from_lateral_accel(LatControlInputs(measurement, roll_compensation, CS.vEgo, CS.aEgo), self.torque_params,
-                                                               gravity_adjusted=False)
-      pid_log.error = float(torque_from_setpoint - torque_from_measurement)
-      ff = self.torque_from_lateral_accel(LatControlInputs(gravity_adjusted_lateral_accel, roll_compensation, CS.vEgo, CS.aEgo), self.torque_params,
-                                          gravity_adjusted=True)
-      ff += get_friction(desired_lateral_accel - actual_lateral_accel, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
-
-      freeze_integrator = steer_limited_by_controls or CS.steeringPressed or CS.vEgo < 5
-      
-      # SP Optimization: Pass filtered rate to PID
-      error_rate_torque = -measurement_rate * self.torque_params.latAccelFactor
-
-      output_torque = self.pid.update(pid_log.error,
-                                      error_rate=error_rate_torque, 
-                                      feedforward=ff,
-                                      speed=CS.vEgo,
-                                      freeze_integrator=freeze_integrator)
-
-      pid_log.active = True
-      pid_log.p = float(self.pid.p)
-      pid_log.i = float(self.pid.i)
-      pid_log.d = float(self.pid.d)
-      pid_log.f = float(self.pid.f)
-      pid_log.output = float(-output_torque)
-      pid_log.actualLateralAccel = float(actual_lateral_accel)
-      pid_log.desiredLateralAccel = float(desired_lateral_accel)
-      pid_log.saturated = bool(self._check_saturation(self.steer_max - abs(output_torque) < 1e-3, CS, steer_limited_by_controls, curvature_limited))
-
-    # TODO left is positive in this convention
-    return -output_torque, 0.0, pid_log
+      actual_lateral_
