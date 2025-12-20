@@ -37,9 +37,9 @@ class Reset(Widget):
     self._mode = mode
     self._previous_reset_state = None
     self._reset_state = ResetState.NONE
-    self._cancel_button = Button("Cancel", self._cancel_callback)
-    self._confirm_button = Button("Confirm", self._confirm, button_style=ButtonStyle.PRIMARY)
-    self._reboot_button = Button("Reboot", lambda: os.system("sudo reboot"))
+    self._cancel_button = Button("關閉", self._cancel_callback)
+    self._confirm_button = Button("確認", self._confirm, button_style=ButtonStyle.PRIMARY)
+    self._reboot_button = Button("重啟", lambda: os.system("sudo reboot"))
     self._render_status = True
 
   def _cancel_callback(self):
@@ -107,14 +107,14 @@ class Reset(Widget):
 
   def _get_body_text(self):
     if self._reset_state == ResetState.CONFIRM:
-      return "Are you sure you want to reset your device?"
+      return "您確定要重設裝置嗎？"
     if self._reset_state == ResetState.RESETTING:
-      return "Resetting device...\nThis may take up to a minute."
+      return 正在重設裝置...這可能需要一分鐘的時間。"
     if self._reset_state == ResetState.FAILED:
-      return "Reset failed. Reboot to try again."
+      return "重設失敗。請重新開機後再試。"
     if self._mode == ResetMode.RECOVER:
-      return "Unable to mount data partition. Partition may be corrupted. Press confirm to erase and reset your device."
-    return "System reset triggered. Press confirm to erase all content and settings. Press cancel to resume boot."
+      return "無法掛載資料磁區。磁區可能已損壞。請按『確認』以清除並重設您的裝置。"
+    return "系統重設已觸發。請按『確認』以清除所有內容與設定。按『取消』以繼續開機。"
 
 
 def main():
