@@ -37,7 +37,7 @@ class Reset(Widget):
     self._mode = mode
     self._previous_reset_state = None
     self._reset_state = ResetState.NONE
-    self._cancel_button = Button("關閉", self._cancel_callback)
+    self._cancel_button = Button("取消", self._cancel_callback)
     self._confirm_button = Button("確認", self._confirm, button_style=ButtonStyle.PRIMARY)
     self._reboot_button = Button("重啟", lambda: os.system("sudo reboot"))
     self._render_status = True
@@ -109,7 +109,7 @@ class Reset(Widget):
     if self._reset_state == ResetState.CONFIRM:
       return "您確定要重設裝置嗎？"
     if self._reset_state == ResetState.RESETTING:
-      return 正在重設裝置...這可能需要一分鐘的時間。"
+      return "正在重設裝置...這可能需要一分鐘的時間。"
     if self._reset_state == ResetState.FAILED:
       return "重設失敗。請重新開機後再試。"
     if self._mode == ResetMode.RECOVER:
