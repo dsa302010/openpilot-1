@@ -19,7 +19,6 @@ class SpeedCameraControl:
     self.angle_vals = [20., 20., 15.]
     
     # 減速啟動半徑 (meters)：針對台灣高速公路優化
-    # 時速 110km/h 對應 300 公尺，提供更平滑的減速段差
     self.limit_radius_bp = [0., 40., 60., 80., 105., 110.]
     self.limit_radius_vals = [100., 100., 100., 150., 200., 300.]
     
@@ -27,7 +26,8 @@ class SpeedCameraControl:
     self.search_bp = [0., 79., 105.]
     self.search_vals = [500., 500., 600.]
     
-    self.center_hold_dist = 50.0 # 抵達相機前 20 公尺維持限速
+    # --- 修改點 1: 設定中心維持距離為 50 公尺 ---
+    self.center_hold_dist = 50.0 
     
     self.last_load_time = 0.0
     self.last_log_time = 0.0 
@@ -123,6 +123,8 @@ class SpeedCameraControl:
       cam_lat, cam_lon, cam_limit = cam
       dist = self._haversine(lat, lon, cam_lat, cam_lon)
       
+      # 初步過濾：如果距離超過搜尋範圍則跳過
+      # 注意：如果是後方(離去)，我們稍後會給予更大的寬容度，但在這裡先用 search_radius 過濾大方向
       if dist > search_radius:
         continue
 
@@ -138,22 +140,36 @@ class SpeedCameraControl:
       is_front = diff_angle <= allowed_angle
       is_behind = (180 - diff_angle) <= allowed_angle
       
-      # 修改：允許通過後在 limit_radius 內繼續追蹤，達成緩加速
-      if not (is_front or (is_behind and dist < limit_radius)):
+      # --- 修改點 2: 設定離去(加速)時的參數 ---
+      # 如果在相機後方 (is_behind)，我們將作用半徑擴大 1.5 倍
+      # 這意味著從 50m 到 (limit_radius * 1.5) 的距離內會進行線性加速，坡度較緩
+      departure_factor = 1.5 if is_behind else 1.0
+      effective_radius = limit_radius * departure_factor
+
+      # 如果既不是前方，也不是後方有效範圍內，則跳過
+      if not (is_front or (is_behind and dist < effective_radius)):
         continue
 
-      # 安全門檻：維持原本的 +20 邏輯，防止資料誤植導致急煞
-      if v_ego_kph > cam_limit + 20:
+      # 安全門檻：防急煞 (僅針對前方，若已經通過相機正在加速，則放寬限制)
+      if is_front and v_ego_kph > cam_limit + 20:
         if dist < min_dist_found:
             closest_log_info = {"status": "速差過大(防急煞)", "dist": dist, "limit": cam_limit}
         continue
 
-      # 計算目標速度
-      if dist > limit_radius:
+      # --- 修改點 3: 計算目標速度的核心邏輯 ---
+      target = v_cruise_kph
+      
+      if dist <= self.center_hold_dist:
+        # 情境 A: 距離小於 50m (包含接近中與剛通過) -> 強制維持限速
+        target = cam_limit
+      elif dist > effective_radius:
+        # 情境 B: 超過有效半徑 -> 恢復巡航速度
         target = v_cruise_kph
       else:
-        # 使用線性插值，在 20m 到 limit_radius 之間平滑變動
-        target = np.interp(dist, [self.center_hold_dist, limit_radius], [cam_limit, v_cruise_kph])
+        # 情境 C: 介於 50m 與 有效半徑之間 -> 線性插值
+        # 接近時 (is_front): 從 effective_radius 減速到 50m 處
+        # 離去時 (is_behind): 從 50m 處加速到 effective_radius (因為半徑較大，斜率較平緩)
+        target = np.interp(dist, [self.center_hold_dist, effective_radius], [cam_limit, v_cruise_kph])
       
       if math.isfinite(target):
         candidates.append(target)
@@ -176,6 +192,7 @@ class SpeedCameraControl:
         status = closest_log_info["status"]
         limit = closest_log_info["limit"]
         dist = closest_log_info["dist"]
+        # 只要目標速度低於巡航速度，就顯示 Log
         if final_target_kph < v_cruise_kph - 1.0:
              cloudlog.warning(f"SCDA {status}: 限速{limit:.0f} | 距離{dist:.0f}m | 目標{final_target_kph:.1f}kph")
 
