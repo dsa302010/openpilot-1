@@ -160,7 +160,7 @@ class SpeedCameraControl:
       target = v_cruise_kph
       
       if dist <= self.center_hold_dist:
-        # 情境 A: 距離小於 50m (包含接近中與剛通過) -> 強制維持限速
+        # 情境 A: 距離小於 25m (包含接近中與剛通過) -> 強制維持限速
         target = cam_limit
       elif dist > effective_radius:
         # 情境 B: 超過有效半徑 -> 恢復巡航速度
