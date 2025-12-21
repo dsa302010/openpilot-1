@@ -26,8 +26,8 @@ class SpeedCameraControl:
     self.search_bp = [0., 79., 105.]
     self.search_vals = [500., 500., 600.]
     
-    # --- 修改點 1: 設定中心維持距離為 50 公尺 ---
-    self.center_hold_dist = 50.0 
+    # --- 修改點 1: 設定中心維持距離為 20 公尺 ---
+    self.center_hold_dist = 20.0 
     
     self.last_load_time = 0.0
     self.last_log_time = 0.0 
@@ -142,7 +142,7 @@ class SpeedCameraControl:
       
       # --- 修改點 2: 設定離去(加速)時的參數 ---
       # 如果在相機後方 (is_behind)，我們將作用半徑擴大 1.5 倍
-      # 這意味著從 50m 到 (limit_radius * 1.5) 的距離內會進行線性加速，坡度較緩
+      # 這意味著從 25m 到 (limit_radius * 1.5) 的距離內會進行線性加速，坡度較緩
       departure_factor = 1.5 if is_behind else 1.0
       effective_radius = limit_radius * departure_factor
 
