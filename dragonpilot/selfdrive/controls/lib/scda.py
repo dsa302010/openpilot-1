@@ -27,7 +27,7 @@ class SpeedCameraControl:
     self.search_bp = [0., 79., 105.]
     self.search_vals = [500., 500., 600.]
     
-    self.center_hold_dist = 20.0 # 抵達相機前 20 公尺維持限速
+    self.center_hold_dist = 50.0 # 抵達相機前 20 公尺維持限速
     
     self.last_load_time = 0.0
     self.last_log_time = 0.0 
