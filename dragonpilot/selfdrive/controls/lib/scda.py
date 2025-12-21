@@ -151,7 +151,7 @@ class SpeedCameraControl:
         continue
 
       # 安全門檻：防急煞 (僅針對前方，若已經通過相機正在加速，則放寬限制)
-      if is_front and v_ego_kph > cam_limit + 20:
+      if is_front and v_ego_kph > cam_limit + 15:
         if dist < min_dist_found:
             closest_log_info = {"status": "速差過大(防急煞)", "dist": dist, "limit": cam_limit}
         continue
