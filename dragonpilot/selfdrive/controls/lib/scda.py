@@ -24,7 +24,7 @@ class SpeedCameraControl:
     
     # 搜尋半徑 (meters)：確保在減速點前就能偵測到相機
     self.search_bp = [0., 79., 105.]
-    self.search_vals = [500., 500., 600.]
+    self.search_vals = [200., 300., 500.]
     
     # --- 修改點 1: 設定中心維持距離為 20 公尺 ---
     self.center_hold_dist = 20.0 
