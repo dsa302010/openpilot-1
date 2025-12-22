@@ -137,7 +137,7 @@ class SpeedCameraControl:
       #    - 若角度 > 15：視為誤判，下面邏輯會將其過濾並 continue。
       
       if dist <= 100.0:
-          allowed_angle = 15.0
+          allowed_angle = 20.0
       else:
           allowed_angle = base_angle
       
