@@ -14,10 +14,10 @@ class SpeedCameraControl:
   def __init__(self):
     self.cameras = np.empty((0, 3))
     
-    # 調整角度參數：0-60km/h 用 20度，80km/h 以上用 15度
+    # 調整角度參數：0-60km/h 用 20度，80km/h 以上用 20度
     # 這是「基礎角度」，用於遠距離偵測
     self.angle_bp = [0., 60., 80.]
-    self.angle_vals = [20., 20., 15.]
+    self.angle_vals = [20., 20., 20.]
     
     # 減速啟動半徑 (meters)：針對台灣高速公路優化
     # 時速 110km/h 對應 300 公尺，提供更平滑的減速段差
@@ -131,13 +131,13 @@ class SpeedCameraControl:
 
       # --- 視角計算：明確的雙重檢查邏輯 ---
       # 說明：
-      # 1. 距離 > 100m：使用 base_angle (高速時較嚴格，如 15度)，避免遠處誤抓。
-      # 2. 距離 <= 100m：強制放寬至 20度 進行雙重確認。
-      #    - 若角度 < 15：持續運作。
-      #    - 若角度 > 15：視為誤判，下面邏輯會將其過濾並 continue。
+      # 1. 距離 > 150m：使用 base_angle (高速時較嚴格，如 15度)，避免遠處誤抓。
+      # 2. 距離 <= 150m：強制放寬至 25度 進行雙重確認。
+      #    - 若角度 < 25：持續運作。
+      #    - 若角度 > 25：視為誤判，下面邏輯會將其過濾並 continue。
       
       if dist <= 150.0:
-          allowed_angle = 20.0
+          allowed_angle = 25.0
       else:
           allowed_angle = base_angle
       
