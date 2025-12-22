@@ -1,6 +1,10 @@
 """
-Dynamic Turn Speed Controller (DTSC) - Refined Final Edition (v9.5)
-Tuned for: Smoother City Cruising & Confident Highway Turns
+Dynamic Turn Speed Controller (DTSC) - Optimized Edition (v10.0)
+主要改進:
+1. 增加 SCDA 優先級支援 - 當測速相機需要減速時,自動放寬轉彎限制
+2. 改進 LPF 重置邏輯 - 避免市區頻繁重置
+3. 增加調試日誌開關 - 方便追蹤問題
+4. 優化 Solver Safeguard - 更智能的衝突處理
 """
 
 import numpy as np
@@ -18,12 +22,13 @@ DT_MPC = 0.05
 BASE_LAT_ACC = 2.8
 SAFETY_SPEED_FACTOR = 0.95
 
-# --- 5點式速度依賴限製表 (m/s²) ---
+# --- 5點式速度依賴限制表 (m/s²) ---
 LAT_LIMIT_BP = [5.0, 10.0, 15.0, 20.0, 25.0]
 LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8]
 
 # --- Low-Pass Filter ---
 LPF_ALPHA = 0.3
+LPF_RESET_LAT_ACC_THRESHOLD = 0.15  # 從 0.2 降低到 0.15,減少頻繁重置
 
 # --- 雙模組 Pre-deceleration 設定 ---
 CITY_DECEL_BP = np.array([0.8, 1.0, 2.0])
@@ -52,7 +57,7 @@ STEER_SPEED_SCALE = 1.0
 STEER_AGGRESSIVENESS = 1.0
 MIN_STEER_SPEED_FLOOR = 5.0
 
-# --- 巷道誤判防護 ---
+# --- 假彎道誤判防護 ---
 PERSISTENCE_MIN_FRAC = 0.5
 CURVATURE_MIN_FOR_PERSIST = 0.01
 SHORT_DIST_IGNORE = 3.5
@@ -61,8 +66,14 @@ SCCV_ABORT_PRED_LAT_ACC_TH = 0.7
 
 # --- 其他參數 ---
 FUTURE_CURVE_THRESHOLD = 0.015
-LPF_RESET_LAT_ACC_THRESHOLD = 0.2
 HYSTERESIS_TIME = 0.5
+
+# --- [新增] SCDA 協同參數 ---
+SCDA_PRIORITY_MARGIN = 1.15  # SCDA 需求減速度的安全係數 (15% 裕度)
+SCDA_MIN_RELAXATION = -3.5   # DTSC 可以放寬到的最大減速度
+
+# --- [新增] 調試開關 ---
+DEBUG_LOGGING = False  # 設為 True 可以看到詳細 Log
 
 # =============================
 # 工具函式
@@ -86,17 +97,18 @@ class DTSC:
         self.active = False
         self.hysteresis_timer = 0.0
         self.filtered_lat_limits = None
+        self.lpf_reset_counter = 0  # [新增] 追蹤重置次數
         
         if cp is not None:
             self.steer_ratio = cp.steerRatio
             self.wheelbase = cp.wheelbase
-            cloudlog.info(f"DTSC v9.5: Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
+            cloudlog.info(f"DTSC v10.0: Loaded CP - SR:{self.steer_ratio:.2f}, WB:{self.wheelbase:.2f}")
         else:
             self.steer_ratio = 14.3
             self.wheelbase = 2.7
-            cloudlog.warning("DTSC v9.5: Warning! Using hardcoded params.")
+            cloudlog.warning("DTSC v10.0: Warning! Using hardcoded params.")
         
-        cloudlog.info(f"DTSC v9.5: Init. Blend Range: {TRANSITION_BP[0]}-{TRANSITION_BP[1]} m/s")
+        cloudlog.info(f"DTSC v10.0: Init. Blend Range: {TRANSITION_BP[0]}-{TRANSITION_BP[1]} m/s")
 
     def set_aggressiveness(self, value):
         self.aggressiveness = clamp(value, 0.5, 1.8)
@@ -169,11 +181,6 @@ class DTSC:
         # Blend Calc
         blend_factor = np.interp(v_ego, TRANSITION_BP, TRANSITION_VALS)
         final_decel = (decel_city * (1.0 - blend_factor)) + (decel_hwy * blend_factor)
-        
-        # [Clouda Suggestion] 增加過渡區間調試日誌
-        # 為了減少 Log 垃圾量，只在過渡區間且有減速需求時紀錄
-        # if TRANSITION_BP[0] <= v_ego <= TRANSITION_BP[1] and final_decel < -0.5:
-        #    cloudlog.debug(f"DTSC Mix: v={v_ego:.1f}, blend={blend_factor:.2f}, city={decel_city:.2f}, hwy={decel_hwy:.2f}")
 
         return clamp(final_decel, EMERGENCY_DECEL, 0.0)
 
@@ -200,7 +207,12 @@ class DTSC:
     def get_mpc_constraints(self, model_msg, v_ego, base_a_min, base_a_max,
                             steer_angle_deg=0.0,
                             steer_ratio=None, 
-                            wheelbase=None):
+                            wheelbase=None,
+                            scda_target_speed=None):  # [新增] SCDA 目標速度
+        """
+        [新增參數] scda_target_speed: SCDA 要求的目標速度 (m/s)
+        如果 SCDA 正在介入且要求減速,DTSC 會適度放寬限制避免衝突
+        """
         current_steer_ratio = steer_ratio if steer_ratio is not None else self.steer_ratio
         current_wheelbase = wheelbase if wheelbase is not None else self.wheelbase
         
@@ -216,8 +228,16 @@ class DTSC:
         predicted_lat_accels = np.abs(v_pred * yaw_rates)
         predicted_lat_acc_max = float(np.max(predicted_lat_accels))
 
+        # [改進] LPF 重置邏輯 - 增加計數器避免頻繁重置
         if predicted_lat_acc_max < LPF_RESET_LAT_ACC_THRESHOLD:
-             self.filtered_lat_limits = None
+            self.lpf_reset_counter += 1
+            if self.lpf_reset_counter > 10:  # 連續 10 幀才重置
+                self.filtered_lat_limits = None
+                self.lpf_reset_counter = 0
+                if DEBUG_LOGGING:
+                    cloudlog.debug("DTSC: LPF Reset")
+        else:
+            self.lpf_reset_counter = 0
 
         safe_speeds, curvatures = self._compute_safe_speeds(
             v_pred, yaw_rates, steer_angle_deg, current_steer_ratio, current_wheelbase)
@@ -252,6 +272,22 @@ class DTSC:
         
         final_required_decel = clamp(final_required_decel, EMERGENCY_DECEL, 0.0)
 
+        # [新增] SCDA 優先級處理
+        scda_required_decel = 0.0
+        if scda_target_speed is not None and scda_target_speed < v_ego:
+            # 計算 SCDA 需要的減速度 (使用最遠距離作為緩衝)
+            max_distance = np.max(rel_pos)
+            if max_distance > 1.0:
+                # v_final^2 = v_init^2 + 2*a*d
+                scda_required_decel = (scda_target_speed ** 2 - v_ego ** 2) / (2.0 * max_distance)
+                scda_required_decel = clamp(scda_required_decel, EMERGENCY_DECEL, 0.0)
+                
+                # 如果 SCDA 需求比 DTSC 更激進,記錄並準備放寬
+                if scda_required_decel < final_required_decel:
+                    scda_required_decel *= SCDA_PRIORITY_MARGIN  # 加 15% 安全裕度
+                    if DEBUG_LOGGING:
+                        cloudlog.warning(f"DTSC: SCDA Priority - SCDA需求={scda_required_decel:.2f}, DTSC={final_required_decel:.2f}")
+
         if final_required_decel < -0.1:
             self.hysteresis_timer = HYSTERESIS_TIME
             self.active = True
@@ -276,9 +312,14 @@ class DTSC:
             for i in range(horizon_len):
                 if rel_pos[i] <= critical_distance + 1e-6:
                     if pass_decel < 0:
-                        # [注意] 這裡維持修改 a_max，因為我們需要"強制減速"。
-                        # Clouda 擔心的"無解"問題會在 longitudinal_planner 裡面的 Solver Safeguard 處理
-                        a_max[i] = min(a_max[i], pass_decel)
+                        # [改進] 如果 SCDA 有更高優先級需求,放寬 DTSC 限制
+                        effective_decel = pass_decel
+                        if scda_required_decel < pass_decel:
+                            effective_decel = max(scda_required_decel, SCDA_MIN_RELAXATION)
+                            if DEBUG_LOGGING and i == 0:
+                                cloudlog.warning(f"DTSC: Relaxed for SCDA - 原={pass_decel:.2f} → 新={effective_decel:.2f}")
+                        
+                        a_max[i] = min(a_max[i], effective_decel)
                 else:
                     if has_future_curve:
                         a_max[i] = min(a_max[i], MAX_EXIT_ACCEL)
