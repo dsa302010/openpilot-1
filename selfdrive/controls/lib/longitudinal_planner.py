@@ -2,7 +2,7 @@
 """
 Longitudinal Planner - Optimized Edition
 主要改進:
-1. 增加 DTSC/SCDA 協調機制 - 傳遞 SCDA 目標速度給 DTSC
+1. 增加 DTSC/SCDA 協調機制 - 傳遞 SCDA 目標速度與距離給 DTSC
 2. 改進錯誤處理 - 更完善的異常捕捉與日誌
 3. 增加性能監控 - 追蹤各模組狀態
 4. 優化邏輯流程 - 更清晰的決策順序
@@ -43,7 +43,8 @@ except ImportError:
     def __init__(self, *args, **kwargs): pass
     def get_mpc_constraints(self, *args, **kwargs): return [], []
   class SpeedCameraControl:
-    def get_target_speed(self, *args, **kwargs): return None
+    def get_target_speed(self, *args, **kwargs): 
+        return {'target_speed': None, 'distance': None, 'limit': None, 'is_active': False}
     def cancel_current_camera(self): pass
     def get_statistics(self): return {}
 
@@ -104,12 +105,14 @@ class LongitudinalPlanner:
     # SCDA 相關狀態
     self.scda_error_count = 0
     self.scda_disabled = False
-    self.scda_target_speed = None  # [新增] 儲存 SCDA 目標速度供 DTSC 使用
+    self.scda_target_speed = None  # SCDA 目標速度
+    self.scda_distance = None      # [新增] SCDA 相機距離
+    self.scda_limit = None         # [新增] SCDA 限速值
     
     # [新增] 性能監控
     self.dtsc_active_count = 0
     self.scda_active_count = 0
-    self.conflict_count = 0  # DTSC/SCDA 衝突次數
+    self.conflict_count = 0
     
     # 模組初始化
     if not DP_MODULES_AVAILABLE:
@@ -179,7 +182,9 @@ class LongitudinalPlanner:
     # ============================================================
     # SCDA Logic (Speed Camera Detection & Adjustment)
     # ============================================================
-    self.scda_target_speed = None  # 每幀重置
+    self.scda_target_speed = None
+    self.scda_distance = None
+    self.scda_limit = None
     scda_is_active = False
     
     if (dp_flags & DPFlags.SCDA) and self.scda is not None and not self.scda_disabled:
@@ -202,7 +207,8 @@ class LongitudinalPlanner:
             bearing = 0.0
           safe_v_ego = v_ego if not math.isnan(v_ego) else 0.0
 
-          scda_target_ms = self.scda.get_target_speed(
+          # [關鍵變更] SCDA 現在返回字典
+          scda_result = self.scda.get_target_speed(
             safe_v_ego,
             v_cruise,
             gps.latitude,
@@ -210,19 +216,29 @@ class LongitudinalPlanner:
             bearing
           )
           
+          # [改進] 處理新的返回格式
+          if isinstance(scda_result, dict):
+              scda_target_ms = scda_result.get('target_speed')
+              self.scda_distance = scda_result.get('distance')
+              self.scda_limit = scda_result.get('limit')
+              scda_is_active = scda_result.get('is_active', False)
+          else:
+              # 向後兼容:如果返回單一值(舊版 SCDA)
+              scda_target_ms = scda_result
+              scda_is_active = (scda_target_ms is not None and scda_target_ms < v_cruise)
+          
           if scda_target_ms is not None and math.isfinite(scda_target_ms):
-            # 檢查 SCDA 是否真的在介入 (目標速度 < 巡航速度)
+            # 檢查 SCDA 是否真的在介入
             if scda_target_ms < v_cruise:
               scda_is_active = True
-              self.scda_target_speed = scda_target_ms  # [關鍵] 儲存供 DTSC 使用
+              self.scda_target_speed = scda_target_ms
               self.scda_active_count += 1
               
               # [改進] 記錄 SCDA 介入資訊
-              if DEBUG_LOGGING:
+              if DEBUG_LOGGING and self.scda_distance is not None:
                 speed_diff = (v_cruise - scda_target_ms) * 3.6
-                cloudlog.debug(f"SCDA Active: 降速 {speed_diff:.1f} kph")
+                cloudlog.debug(f"SCDA Active: 降速 {speed_diff:.1f} kph, 距離 {self.scda_distance:.0f}m")
             
-            # 取交集:如果 SCDA 算出更低的速度,就用 SCDA 的
             v_cruise = min(v_cruise, scda_target_ms)
             self.scda_error_count = 0
             
@@ -281,7 +297,8 @@ class LongitudinalPlanner:
         steer_ratio = self.CP.steerRatio
         wheelbase = self.CP.wheelbase
 
-        # [關鍵改進] 傳遞 SCDA 目標速度給 DTSC
+        # [關鍵改進] 傳遞 SCDA 完整資訊給 DTSC
+        # DTSC 可以根據距離判斷是否需要放寬限制
         a_min_dtsc, a_max_dtsc = self.dtsc.get_mpc_constraints(
           model_msg=sm['modelV2'], 
           v_ego=v_ego, 
@@ -290,7 +307,7 @@ class LongitudinalPlanner:
           steer_angle_deg=steer_angle,
           steer_ratio=steer_ratio,
           wheelbase=wheelbase,
-          scda_target_speed=self.scda_target_speed  # [新增] 傳遞 SCDA 目標
+          scda_target_speed=self.scda_target_speed  # SCDA 目標速度
         )
         
         # 檢查 DTSC 是否啟動
@@ -303,19 +320,17 @@ class LongitudinalPlanner:
         for i in range(safe_len):
           d_a_max = a_max_dtsc[i]
 
-          # 計算最終約束:取系統限制與 DTSC 限制的交集
+          # 計算最終約束
           target_min = max(accel_clip[0], a_min_dtsc[i])
           target_max = min(accel_clip[1], d_a_max)
 
-          # [改進] Solver Safeguard - 更智能的處理
+          # [改進] Solver Safeguard
           if target_min > target_max:
-              # 記錄衝突
               if scda_is_active and dtsc_is_active and i == 0:
                   self.conflict_count += 1
                   if DEBUG_LOGGING:
-                      cloudlog.warning(f"DP: 約束衝突 - SCDA={scda_is_active}, DTSC={dtsc_is_active}, min={target_min:.2f}, max={target_max:.2f}")
+                      cloudlog.warning(f"DP: 約束衝突 - SCDA距離={self.scda_distance:.0f}m, min={target_min:.2f}, max={target_max:.2f}")
               
-              # 數學修正:確保 min <= max
               target_min = target_max - 0.01 
 
           if math.isfinite(target_min) and math.isfinite(target_max):
@@ -326,9 +341,10 @@ class LongitudinalPlanner:
         cloudlog.exception(f"DP: DTSC logic crashed - {e}")
     # ============================================================
 
-    # [新增] 衝突檢測與日誌
+    # [新增] 雙系統協調日誌
     if scda_is_active and dtsc_is_active and DEBUG_LOGGING:
-        cloudlog.debug(f"DP: 雙系統啟動 - SCDA目標={self.scda_target_speed*3.6:.1f}kph, DTSC active")
+        if self.scda_distance is not None:
+            cloudlog.debug(f"DP: 雙系統啟動 - SCDA距離={self.scda_distance:.0f}m, 限速={self.scda_limit}kph")
 
     self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality)
 
@@ -415,7 +431,9 @@ class LongitudinalPlanner:
         "dtsc_active_count": self.dtsc_active_count,
         "scda_active_count": self.scda_active_count,
         "conflict_count": self.conflict_count,
-        "scda_disabled": self.scda_disabled
+        "scda_disabled": self.scda_disabled,
+        "scda_distance": self.scda_distance,
+        "scda_limit": self.scda_limit
     }
     
     if self.scda is not None:
