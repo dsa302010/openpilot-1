@@ -15,7 +15,7 @@ class SpeedCameraControl:
     self.cameras = np.empty((0, 3))
     
     # 調整角度參數：0-60km/h 用 20度，80km/h 以上用 15度
-    # (註：雖然這裡定義了，但在下方邏輯中我們已強制使用 20 度作為雙重檢查門檻)
+    # 這是「基礎角度」，用於遠距離偵測
     self.angle_bp = [0., 60., 80.]
     self.angle_vals = [20., 20., 15.]
     
@@ -107,7 +107,8 @@ class SpeedCameraControl:
     # 動態參數計算
     search_radius = np.interp(v_ego_kph, self.search_bp, self.search_vals)
     limit_radius = np.interp(v_ego_kph, self.limit_radius_bp, self.limit_radius_vals)
-    # base_angle 在此保留但不使用，直接採用下方 20 度邏輯
+    
+    # 這裡計算基礎角度 (高速時通常為 15度)
     base_angle = np.interp(v_ego_kph, self.angle_bp, self.angle_vals)
 
     # 範圍過濾
@@ -128,12 +129,17 @@ class SpeedCameraControl:
       if dist > search_radius:
         continue
 
-      # --- 視角計算：雙重檢查邏輯修改 ---
-      # 說明：無論遠近，將檢查角度統一設為 20 度。
-      # 當距離 <= 150m 時，這起到雙重檢查作用：
-      # 1. 角度 < 20 (如 18度)：判定為彎道或前方，持續運作。
-      # 2. 角度 > 20 (如 22度)：判定為誤判(鄰道)，continue 跳過 -> 取消減速並緩加速。
-      allowed_angle = 20.0 
+      # --- 視角計算：明確的雙重檢查邏輯 ---
+      # 說明：
+      # 1. 距離 > 100m：使用 base_angle (高速時較嚴格，如 15度)，避免遠處誤抓。
+      # 2. 距離 <= 100m：強制放寬至 20度 進行雙重確認。
+      #    - 若角度 < 15：持續運作。
+      #    - 若角度 > 15：視為誤判，下面邏輯會將其過濾並 continue。
+      
+      if dist <= 100.0:
+          allowed_angle = 15.0
+      else:
+          allowed_angle = base_angle
       
       if math.isnan(bearing_deg): continue
       
@@ -145,13 +151,12 @@ class SpeedCameraControl:
       is_front = diff_angle <= allowed_angle
       is_behind = (180 - diff_angle) <= allowed_angle
       
-      # 若不符合角度條件 (例如 diff_angle > 20)，則 is_front 為 False，
-      # 程式會在此處 continue，不加入 candidates，達成「取消減速」效果。
+      # 若在 100m 內且 diff_angle > 20，is_front 為 False -> 執行 continue -> 取消減速
       if not (is_front or (is_behind and dist < limit_radius)):
         continue
 
-      # 安全門檻：維持原本的 +20 邏輯，防止資料誤植導致急煞
-      if v_ego_kph > cam_limit + 20:
+      # 安全門檻：防急煞
+      if v_ego_kph > cam_limit + 15:
         if dist < min_dist_found:
             closest_log_info = {"status": "速差過大(防急煞)", "dist": dist, "limit": cam_limit}
         continue
