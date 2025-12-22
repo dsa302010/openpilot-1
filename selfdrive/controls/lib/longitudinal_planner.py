@@ -15,13 +15,15 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
+# --- DragonPilot 模組導入 ---
 try:
   from dragonpilot.selfdrive.controls.lib.acm import ACM
   from dragonpilot.selfdrive.controls.lib.aem import AEM
   from dragonpilot.selfdrive.controls.lib.dtsc import DTSC
   from dragonpilot.selfdrive.controls.lib.scda import SpeedCameraControl
 except ImportError:
-  cloudlog.exception("DP: Critical Import Error")
+  cloudlog.exception("DP: Critical Import Error - 模組導入失敗")
+  # 建立空的 Dummy Class 防止崩潰
   class ACM: 
     def update_states(self, *args, **kwargs): pass
     def update_a_desired_trajectory(self, a): return a
@@ -34,6 +36,9 @@ except ImportError:
   class SpeedCameraControl:
     def get_target_speed(self, *args, **kwargs): return None
 
+# =============================
+# 參數定義
+# =============================
 LON_MPC_STEP = 0.2
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
 A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
@@ -58,6 +63,11 @@ def get_coast_accel(pitch):
   return np.sin(pitch) * -5.65 - 0.3
 
 def limit_accel_in_turns(v_ego, angle_steers, a_target, CP):
+  """
+  彎道限制加速度邏輯：
+  根據轉向角度與車速計算側向加速度 (Lateral G)，
+  進而限制縱向加速度 (Longitudinal Accel)，防止過彎太快。
+  """
   a_total_max = np.interp(v_ego, _A_TOTAL_MAX_BP, _A_TOTAL_MAX_V)
   a_y = v_ego ** 2 * angle_steers * CV.DEG_TO_RAD / (CP.steerRatio * CP.wheelbase)
   a_x_allowed = math.sqrt(max(a_total_max ** 2 - a_y ** 2, 0.))
@@ -83,9 +93,11 @@ class LongitudinalPlanner:
     self.j_desired_trajectory = np.zeros(CONTROL_N)
     self.solverExecutionTime = 0.0
     
+    # SCDA 錯誤計數器與狀態
     self.scda_error_count = 0
     self.scda_disabled = False
     
+    # 初始化 DP 模組
     try:
       self.acm = ACM()
       self.aem = AEM()
@@ -121,6 +133,7 @@ class LongitudinalPlanner:
   def update(self, sm, dp_flags = 0):
     mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
 
+    # === AEM (Auto Experimental Mode) ===
     if dp_flags & DPFlags.AEM:
       try:
         self.aem.update_states(model_msg=sm['modelV2'], radar_msg=sm['radarState'], v_ego=sm['carState'].vEgo)
@@ -138,12 +151,21 @@ class LongitudinalPlanner:
     v_cruise = v_cruise_kph * CV.KPH_TO_MS
     v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
 
-    # === SCDA Logic ===
-    scda_active = False # [Clouda Suggestion] 檢測 SCDA 是否正在限制速度
+    # ============================================================
+    # SCDA Logic (Speed Camera Detection & Adjustment)
+    # ============================================================
+    scda_active = False 
     
     if (dp_flags & DPFlags.SCDA) and self.scda is not None and not self.scda_disabled:
+      
+      # [新增功能] 偵測油門踩踏
+      # 如果使用者踩下油門，呼叫 cancel_current_camera 通知 SCDA 忽略當前相機
+      if sm['carState'].gasPressed:
+          self.scda.cancel_current_camera()
+
       try:
         gps = sm['gpsLocationExternal']
+        # 檢查 GPS 有效性
         is_gps_valid = (gps.flags & 1) and (gps.latitude != 0.0) and (gps.longitude != 0.0)
         
         if is_gps_valid:
@@ -152,6 +174,7 @@ class LongitudinalPlanner:
             bearing = 0.0
           safe_v_ego = v_ego if not math.isnan(v_ego) else 0.0
 
+          # 計算 SCDA 目標速度
           scda_target_ms = self.scda.get_target_speed(
             safe_v_ego,
             v_cruise,
@@ -161,10 +184,11 @@ class LongitudinalPlanner:
           )
           
           if scda_target_ms is not None and math.isfinite(scda_target_ms):
-            # 檢測 SCDA 是否正在"積極"運作 (即目標速度低於當前巡航速度)
+            # 判斷 SCDA 是否正在積極減速 (目標速度 < 巡航速度)
             if scda_target_ms < v_cruise - 1.0: 
                 scda_active = True
-                
+            
+            # 將巡航速度更新為兩者較小值
             v_cruise = min(v_cruise, scda_target_ms)
             self.scda_error_count = 0
             
@@ -173,7 +197,7 @@ class LongitudinalPlanner:
         if self.scda_error_count > 5:
             self.scda_disabled = True
             cloudlog.warning("DP: SCDA disabled due to excessive errors.")
-    # ============================
+    # ============================================================
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
     force_slow_decel = sm['controlsState'].forceDecel
@@ -183,6 +207,7 @@ class LongitudinalPlanner:
 
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
+    # 設定 ACC 加速度限制
     if mode == 'acc':
       accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
       steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
@@ -209,13 +234,16 @@ class LongitudinalPlanner:
     self.mpc.set_weights(prev_accel_constraint, personality=sm['selfdriveState'].personality)
     self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
 
-    # === DTSC Logic (Solver Safeguard Edition) ===
+    # ============================================================
+    # DTSC Logic (Dynamic Turn Speed Controller)
+    # ============================================================
     if (dp_flags & DPFlags.DTSC) and self.dtsc is not None:
       try:
         steer_angle = sm['carState'].steeringAngleDeg
         steer_ratio = self.CP.steerRatio
         wheelbase = self.CP.wheelbase
 
+        # 取得 DTSC 計算出的加速度限制 (a_min, a_max)
         a_min_dtsc, a_max_dtsc = self.dtsc.get_mpc_constraints(
           model_msg=sm['modelV2'], 
           v_ego=v_ego, 
@@ -226,38 +254,35 @@ class LongitudinalPlanner:
           wheelbase=wheelbase
         )
         
-        # [Clouda Fix] 如果 SCDA 正在減速，稍微放寬 DTSC 限制 (避免雙重減速)
-        # 這裡我們不改變 DTSC 內部邏輯，而是檢查如果 SCDA 已經在煞車，我們就不讓 DTSC 煞得那麼死
-        # (這裡選擇簡單邏輯：若 SCDA 作用中，只採用 DTSC 的 50% 減速強度，或者依賴下方 min/max 邏輯)
-        # 實務上，下方 Solver Safeguard 更重要。
-
+        # 套用限制到 MPC 參數
         safe_len = min(len(a_min_dtsc), self.mpc.params.shape[0])
 
         for i in range(safe_len):
-          # [Point 5 Order] 使用 max/min 確保符合 accel_clip 限制
+          # 1. 確保 DTSC 限制不會超出物理極限 (accel_clip)
           target_min = max(accel_clip[0], a_min_dtsc[i])
           target_max = min(accel_clip[1], a_max_dtsc[i])
 
-          # [CRITICAL POINT 1 FIX] Solver Safeguard
-          # 解決 DTSC 可能要求 a_max < a_min 的問題。
-          # 如果 DTSC 要求極限煞車 (target_max 變成 -2.0)，但系統預設 target_min 是 -1.5
-          # 此時 max < min，求解器會崩潰。
-          # 修正：強制拉低 target_min 來滿足 DTSC 的煞車需求。
+          # 2. [Solver Safeguard] - 關鍵修正
+          # 解決 DTSC 可能要求 a_max < a_min 導致 MPC 求解器崩潰的問題。
+          # 狀況：如果 DTSC 計算出需要緊急減速 (例如 max 為 -2.0)，但系統預設 min 為 -1.5。
+          # 修正：強制拉低 target_min，使其比 target_max 更小，確保 min < max 成立。
           if target_min > target_max:
-              target_min = target_max - 0.01  # 強制讓 min 小於 max，保持 0.01 的餘裕
+              target_min = target_max - 0.01 
 
           if math.isfinite(target_min) and math.isfinite(target_max):
               self.mpc.params[i, 0] = target_min
               self.mpc.params[i, 1] = target_max
       except Exception:
         cloudlog.exception("DP: DTSC logic crashed")
-    # ========================
+    # ============================================================
 
+    # 執行 MPC 求解
     self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
     
+    # === ACM (Acceleration Control Manager) ===
     if dp_flags & DPFlags.ACM:
       try:
         user_control = long_control_off if self.CP.openpilotLongitudinalControl else not sm['selfdriveState'].enabled
@@ -294,7 +319,7 @@ class LongitudinalPlanner:
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip
 
-    # [Clouda Fix Point 3 & Testing] 最終輸出安全檢查
+    # [Safety Check] 最終輸出數值檢查，防止 NaN 傳入控製器
     if not math.isfinite(float(self.output_a_target)):
         cloudlog.error(f"DP: Invalid a_target! DTSC={dp_flags & DPFlags.DTSC}, SCDA={dp_flags & DPFlags.SCDA}")
         self.output_a_target = 0.0
