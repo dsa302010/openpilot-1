@@ -22,13 +22,13 @@ class SpeedCameraControl:
     # 減速啟動半徑 (meters)：針對台灣高速公路優化
     # 時速 110km/h 對應 300 公尺，提供更平滑的減速段差
     self.limit_radius_bp = [0., 40., 60., 80., 105., 110.]
-    self.limit_radius_vals = [100., 100., 100., 150., 200., 300.]
+    self.limit_radius_vals = [100., 150., 150., 150., 200., 300.]
     
     # 搜尋半徑 (meters)：確保在減速點前就能偵測到相機
     self.search_bp = [0., 79., 105.]
-    self.search_vals = [200., 300., 500.]
+    self.search_vals = [500., 500., 600.]
     
-    self.center_hold_dist = 25.0 # 抵達相機前 20 公尺維持限速
+    self.center_hold_dist = 50.0 # 抵達相機前 50 公尺維持限速
     
     self.last_load_time = 0.0
     self.last_log_time = 0.0 
@@ -136,7 +136,7 @@ class SpeedCameraControl:
       #    - 若角度 < 15：持續運作。
       #    - 若角度 > 15：視為誤判，下面邏輯會將其過濾並 continue。
       
-      if dist <= 100.0:
+      if dist <= 150.0:
           allowed_angle = 20.0
       else:
           allowed_angle = base_angle
