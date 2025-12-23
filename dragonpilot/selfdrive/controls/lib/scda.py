@@ -27,7 +27,7 @@ EMERGENCY_DECEL_THRESHOLD = -3.5  # m/s² - 緊急煞車閾值
 SAFETY_TIME_BUFFER = 2.0  # 秒 - 安全時間緩衝
 
 # --- [新增] 調試開關 ---
-DEBUG_LOGGING = False  # 設為 True 查看詳細 Log
+DEBUG_LOGGING = True  # 設為 True 查看詳細 Log
 
 class SpeedCameraControl:
   def __init__(self):
