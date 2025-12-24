@@ -4,8 +4,8 @@ Speed Camera Detection & Adjustment (SCDA) - Aggressive Edition
 測速照相偵測與調整 - 激進介入版
 
 修改紀錄:
-3. 放寬緊急煞車閾值，允許更強的減速力道。
-4. 強制開啟調試日誌 (DEBUG_LOGGING)，方便追蹤介入情況。
+放寬緊急煞車閾值，允許更強的減速力道。
+強制開啟調試日誌 (DEBUG_LOGGING)，方便追蹤介入情況。
 """
 import os
 import csv
