@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Longitudinal Planner - Debug & Integrated Edition
-主要改進:
-1. 強制開啟 DEBUG_LOGGING，顯示 SCDA 觸發狀態
-2. 優化 SCDA 觸發判斷的浮點數誤差
+Longitudinal Planner - Integrated Edition
+功能:
+1. 整合 SCDA 與 DTSC，並啟用雙向通訊 (距離傳遞)。
+2. 包含踩油門取消 SCDA 的偵測邏輯。
+3. 包含詳細 Debug Log。
 """
 import math
 import numpy as np
@@ -21,6 +22,7 @@ from openpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_accel_
 from openpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
 from openpilot.common.swaglog import cloudlog
 
+# --- DragonPilot Modules ---
 try:
   from dragonpilot.selfdrive.controls.lib.acm import ACM
   from dragonpilot.selfdrive.controls.lib.aem import AEM
@@ -46,7 +48,7 @@ except ImportError:
     def get_statistics(self): return {}
 
 # =============================
-# 參數定義
+# Constants
 # =============================
 LON_MPC_STEP = 0.2
 A_CRUISE_MAX_VALS = [1.6, 1.2, 0.8, 0.6]
@@ -58,7 +60,7 @@ MIN_ALLOW_THROTTLE_SPEED = 2.5
 _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
 
-# [修正] 強制開啟 Log
+# 開啟 Log
 DEBUG_LOGGING = True
 
 class DPFlags:
@@ -99,16 +101,14 @@ class LongitudinalPlanner:
     self.j_desired_trajectory = np.zeros(CONTROL_N)
     self.solverExecutionTime = 0.0
     
+    # SCDA State
     self.scda_error_count = 0
     self.scda_disabled = False
-    self.scda_target_speed = None  
-    self.scda_distance = None      
-    self.scda_limit = None         
+    self.scda_target_speed = None
+    self.scda_distance = None      # 儲存 SCDA 距離供 DTSC 使用
+    self.scda_limit = None
     
-    self.dtsc_active_count = 0
-    self.scda_active_count = 0
-    self.conflict_count = 0
-    
+    # Init modules
     if not DP_MODULES_AVAILABLE:
       self.acm = ACM()
       self.aem = AEM()
@@ -121,10 +121,9 @@ class LongitudinalPlanner:
       self.aem = AEM()
       self.dtsc = DTSC(aggressiveness=1.0, cp=self.CP)
       self.scda = SpeedCameraControl()
-      if DEBUG_LOGGING:
-          cloudlog.info("DP: All modules initialized.")
+      if DEBUG_LOGGING: cloudlog.info("DP: Modules initialized")
     except Exception as e:
-      cloudlog.exception(f"DP: Module initialization failed - {e}")
+      cloudlog.exception(f"DP: Init error - {e}")
       self.acm = ACM()
       self.aem = AEM()
       self.dtsc = None
@@ -157,8 +156,7 @@ class LongitudinalPlanner:
       try:
         self.aem.update_states(model_msg=sm['modelV2'], radar_msg=sm['radarState'], v_ego=sm['carState'].vEgo)
         mode = self.aem.get_mode(mode)
-      except Exception as e:
-        if DEBUG_LOGGING: cloudlog.exception(f"DP: AEM error - {e}")
+      except Exception: pass
 
     if len(sm['carControl'].orientationNED) == 3:
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
@@ -176,11 +174,12 @@ class LongitudinalPlanner:
     self.scda_target_speed = None
     self.scda_distance = None
     self.scda_limit = None
-    scda_is_active = False
     
     if (dp_flags & DPFlags.SCDA) and self.scda is not None and not self.scda_disabled:
+      # 踩油門取消功能
       if sm['carState'].gasPressed:
-          self.scda.cancel_current_camera()
+          try: self.scda.cancel_current_camera()
+          except Exception: pass
 
       try:
         gps = sm['gpsLocationExternal']
@@ -195,21 +194,15 @@ class LongitudinalPlanner:
           
           if isinstance(scda_result, dict):
               scda_target_ms = scda_result.get('target_speed')
-              self.scda_distance = scda_result.get('distance')
+              # [重要] 儲存距離供 DTSC 使用
+              self.scda_distance = scda_result.get('distance') 
               self.scda_limit = scda_result.get('limit')
           else:
               scda_target_ms = scda_result
           
           if scda_target_ms is not None and math.isfinite(scda_target_ms):
-            # [修正] 增加 0.5m/s 的 buffer，確保不會因浮點數震盪而跳過
-            if scda_target_ms < v_cruise - 0.5:
-              scda_is_active = True
+            if scda_target_ms < v_cruise:
               self.scda_target_speed = scda_target_ms
-              self.scda_active_count += 1
-              
-              if DEBUG_LOGGING and self.scda_active_count % 20 == 0:
-                  d = self.scda_distance if self.scda_distance else 0
-                  cloudlog.warning(f"DP SCDA: ACTIVE | 限速:{self.scda_limit} | 距離:{d:.0f}m | 目標:{scda_target_ms*3.6:.0f}kph")
             
             v_cruise = min(v_cruise, scda_target_ms)
             self.scda_error_count = 0
@@ -218,7 +211,7 @@ class LongitudinalPlanner:
         self.scda_error_count += 1
         if self.scda_error_count > 5:
             self.scda_disabled = True
-            cloudlog.warning(f"DP: SCDA disabled - {e}")
+            if DEBUG_LOGGING: cloudlog.warning(f"DP: SCDA disabled - {e}")
     # ============================================================
 
     long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
@@ -226,7 +219,6 @@ class LongitudinalPlanner:
 
     reset_state = long_control_off if self.CP.openpilotLongitudinalControl else not sm['selfdriveState'].enabled
     reset_state = reset_state or not v_cruise_initialized
-
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
     if mode == 'acc':
@@ -258,11 +250,11 @@ class LongitudinalPlanner:
     # ============================================================
     # DTSC Logic
     # ============================================================
-    dtsc_is_active = False
-    
     if (dp_flags & DPFlags.DTSC) and self.dtsc is not None:
       try:
         steer_angle = sm['carState'].steeringAngleDeg
+        
+        # [重要] 傳遞 scda_distance 給 DTSC
         a_min_dtsc, a_max_dtsc = self.dtsc.get_mpc_constraints(
           model_msg=sm['modelV2'], 
           v_ego=v_ego, 
@@ -271,12 +263,9 @@ class LongitudinalPlanner:
           steer_angle_deg=steer_angle,
           steer_ratio=self.CP.steerRatio,
           wheelbase=self.CP.wheelbase,
-          scda_target_speed=self.scda_target_speed
+          scda_target_speed=self.scda_target_speed,
+          scda_distance=self.scda_distance
         )
-        
-        if hasattr(self.dtsc, 'active') and self.dtsc.active:
-          dtsc_is_active = True
-          self.dtsc_active_count += 1
         
         safe_len = min(len(a_min_dtsc), self.mpc.params.shape[0])
 
@@ -286,10 +275,6 @@ class LongitudinalPlanner:
           target_max = min(accel_clip[1], d_a_max)
 
           if target_min > target_max:
-              if scda_is_active and dtsc_is_active and i == 0 and DEBUG_LOGGING:
-                  self.conflict_count += 1
-                  if self.conflict_count % 10 == 0:
-                      cloudlog.warning(f"DP Conflict: SCDA_Dist={self.scda_distance} | Min={target_min:.2f} > Max={target_max:.2f}")
               target_min = target_max - 0.01 
 
           if math.isfinite(target_min) and math.isfinite(target_max):
@@ -297,7 +282,7 @@ class LongitudinalPlanner:
               self.mpc.params[i, 1] = target_max
               
       except Exception as e:
-        cloudlog.exception(f"DP: DTSC logic crashed - {e}")
+        if DEBUG_LOGGING: cloudlog.exception(f"DP: DTSC logic crashed - {e}")
     # ============================================================
 
     self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality)
@@ -310,8 +295,7 @@ class LongitudinalPlanner:
         user_control = long_control_off if self.CP.openpilotLongitudinalControl else not sm['selfdriveState'].enabled
         self.acm.update_states(sm['carControl'], sm['radarState'], user_control, v_ego, v_cruise)
         self.a_desired_trajectory = self.acm.update_a_desired_trajectory(self.a_desired_trajectory)
-      except Exception as e:
-        pass
+      except Exception: pass
     
     self.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC[:-1], self.mpc.j_solution)
 
@@ -342,9 +326,6 @@ class LongitudinalPlanner:
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip
 
-    if not math.isfinite(float(self.output_a_target)):
-        self.output_a_target = 0.0
-
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan')
     plan_send.valid = sm.all_checks(service_list=['carState', 'controlsState', 'selfdriveState', 'radarState'])
@@ -371,16 +352,8 @@ class LongitudinalPlanner:
     
   def get_diagnostics(self):
     diag = {
-        "dtsc_active_count": self.dtsc_active_count,
-        "scda_active_count": self.scda_active_count,
-        "conflict_count": self.conflict_count,
         "scda_disabled": self.scda_disabled,
         "scda_distance": self.scda_distance,
         "scda_limit": self.scda_limit
     }
-    if self.scda is not None:
-        try:
-            scda_stats = self.scda.get_statistics()
-            diag.update({"scda_" + k: v for k, v in scda_stats.items()})
-        except: pass
     return diag
