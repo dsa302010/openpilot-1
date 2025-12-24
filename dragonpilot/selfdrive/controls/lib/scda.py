@@ -37,9 +37,6 @@ class SpeedCameraControl:
     self.search_bp = [0., 79., 105.]
     self.search_vals = [500., 500., 600.]
     
-    # [移除] 原本固定的 center_hold_dist = 50.0
-    # 改在 get_target_speed 內根據車速動態計算
-    
     self.last_load_time = 0.0
     self.last_log_time = 0.0 
     
@@ -172,7 +169,7 @@ class SpeedCameraControl:
       
       if dist > search_radius: continue
 
-      # 角度判斷
+      # 近距離角度判斷
       allowed_angle = 20.0 if dist <= 150.0 else base_angle
       if math.isnan(bearing_deg): continue
       cam_bearing = self._bearing(lat, lon, cam_lat, cam_lon)
