@@ -1,9 +1,5 @@
 """
 Dynamic Turn Speed Controller (DTSC) - Optimized Edition (Sensitive Fix)
-主要改進:
-1. 降低 SCCV 觸發門檻 (0.7 -> 0.4)
-2. 修復 SCDA 優先級可能導致死鎖的問題
-3. 強制開啟 Debug Log
 """
 
 import numpy as np
