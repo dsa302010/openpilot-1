@@ -1,5 +1,5 @@
 """
-AEM (Automatic Experimental Mode) - Final Clean Version (No Blinker)
+AEM (Automatic Experimental Mode) - Modified for Undershooting Logic
 Copyright (c) 2025, Modified for DragonPilot
 """
 
@@ -25,10 +25,10 @@ class Config:
     LEAD_CLOSE_DIST        = 15.0  # [m] 貼車防撞
     SLOW_LEAD_DIST_MAX     = 100.0 # [m] 慢車偵測
 
-    # --- 彎道救援參數 ---
-    BAILOUT_LAT_G      = 2.5   # [G] 側向力救車門檻
-    BAILOUT_LAT_ERROR  = 0.35  # [m] 車道偏離救車門檻
-    BAILOUT_SPEED_MIN  = 30.0  # [km/h]
+    # --- 彎道救援參數 (已修改) ---
+    BAILOUT_LAT_G      = 2.5   # [G] 側向力極限 (防嚴重失控的最後防線)
+    BAILOUT_LAT_ERROR  = 0.30  # [m] 車道偏離觸發門檻 (當偏移超過此值且發生推頭時觸發)
+    BAILOUT_SPEED_MIN  = 30.0  # [km/h] 低於此速度不觸發救車
 
     # --- 速度定義 ---
     HIGHWAY_SPEED  = 80.0
@@ -51,6 +51,9 @@ class Config:
 # ==============================================================================
 
 class SmoothKalmanFilter:
+  """
+  簡單的卡爾曼濾波器，用於平滑數值 (如 Urgency)
+  """
   def __init__(self, initial_value=0, alpha=1.0, smoothing_factor=0.85):
     self.x = initial_value
     self.P = 1.0
@@ -77,6 +80,9 @@ class SmoothKalmanFilter:
     return self.x if self.initialized else 0.0
 
 class ModeTransitionManager:
+  """
+  模式切換管理器，負責處理 ACC 與 Blended (實驗模式) 之間的切換與信心值
+  """
   def __init__(self):
     self.current_mode = Config.MODE_ACC
     self.mode_confidence = {Config.MODE_ACC: 1.0, Config.MODE_BLENDED: 0.0}
@@ -84,9 +90,10 @@ class ModeTransitionManager:
     self.frame_count = 0
 
   def request_mode(self, mode, confidence=1.0, emergency=False):
+    # 緊急情況強制切換並鎖定一段時間
     if emergency:
       self.current_mode = mode
-      self.lock_timer = 20
+      self.lock_timer = 20 # 鎖定約 1 秒 (假設 20Hz)
       self.mode_confidence[Config.MODE_BLENDED] = 1.0
       self.mode_confidence[Config.MODE_ACC] = 0.0
       return
@@ -94,13 +101,16 @@ class ModeTransitionManager:
     if self.lock_timer > 0:
       return
 
+    # 平滑增加目標模式的信心值
     target_conf = min(1.0, self.mode_confidence[mode] + 0.05 * confidence)
     self.mode_confidence[mode] = target_conf
 
+    # 降低其他模式的信心值
     for m in self.mode_confidence:
       if m != mode:
         self.mode_confidence[m] = max(0.0, self.mode_confidence[m] - 0.05)
 
+    # 門檻判斷 (切換模式需要較高的信心值，避免頻繁跳動)
     threshold = 0.75 if mode != self.current_mode else 0.4
     if self.mode_confidence[mode] > threshold:
         self.current_mode = mode
@@ -108,6 +118,7 @@ class ModeTransitionManager:
   def update(self):
     if self.lock_timer > 0:
       self.lock_timer -= 1
+    # 自然衰減 Blended 模式信心 (若無人請求)
     self.mode_confidence[Config.MODE_BLENDED] *= 0.95
     self.mode_confidence[Config.MODE_ACC] = 1.0 - self.mode_confidence[Config.MODE_BLENDED]
     self.frame_count += 1
@@ -128,9 +139,10 @@ class AEM:
     def get_mode(self, current_mode_str):
         return self._mode_manager.get_mode()
 
-    # [移除] left_blinker, right_blinker 參數
     def update_states(self, model_msg, radar_msg, v_ego):
-        """主邏輯更新"""
+        """
+        主邏輯更新入口
+        """
         if not (len(model_msg.position.x) == ModelConstants.IDX_N and 
                 len(model_msg.position.z) == ModelConstants.IDX_N):
             return
@@ -140,7 +152,7 @@ class AEM:
         path_z = model_msg.position.z 
         model_end_dist = path_z[ModelConstants.IDX_N - 1]
 
-        # 計算曲率
+        # 計算曲率 (Curvature)
         curvature_val = 0.0
         try:
             mid_idx = 15
@@ -149,23 +161,24 @@ class AEM:
         except:
             curvature_val = 0.0
 
-        # 計算偏差
+        # 計算偏差 (Lateral Error)
         current_lat_error = 0.0
         try:
+            # 取前 5 點的平均偏差作為當前車道中心偏差
             current_lat_error = np.mean(np.abs(path_x[0:5]))
         except:
             pass
 
-        # 計算舒適減速
+        # 計算舒適減速 (Curve Slowdown)
         self._calculate_slow_down(model_end_dist, min(1.0, curvature_val * 500.0), v_ego, v_kph)
 
-        # 決策 (不再傳入方向燈參數)
-        self._make_decision(radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error)
+        # 決策 (注意：這裡將 path_x 傳入，用於 Undershooting 判斷)
+        self._make_decision(radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error, path_x)
 
         self._mode_manager.update()
 
     def _calculate_slow_down(self, model_end_dist, curvature, v_ego, v_kph):
-        """計算舒適減速 Urgency"""
+        """計算舒適減速的急迫程度 (Urgency)"""
         base_expected = np.interp(v_ego, Config.SLOW_DOWN_BP, Config.SLOW_DOWN_DIST)
         sensitivity = np.interp(v_kph, Config.SENSITIVITY_BP, Config.SENSITIVITY_VALS)
 
@@ -174,7 +187,7 @@ class AEM:
 
         urgency = 0.0
 
-        # City Boost Logic
+        # 市區與高速使用不同的邏輯
         if v_kph < 55.0:
             if model_end_dist < expected_distance:
                 shortage = expected_distance - model_end_dist
@@ -189,20 +202,21 @@ class AEM:
         self._slow_down_filter.add_data(urgency)
         self._urgency = self._slow_down_filter.get_value()
 
-    def _make_decision(self, radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error):
-        """分層決策"""
+    def _make_decision(self, radar_msg, v_kph, model_end_dist, curvature_val, current_lat_error, path_x):
+        """分層決策邏輯"""
 
-        # [優先級 0] 彎道救援
-        if self._check_bailout(v_kph, curvature_val, current_lat_error):
+        # [優先級 0] 彎道救援 (Undershooting / 嚴重失控)
+        if self._check_bailout(v_kph, curvature_val, current_lat_error, path_x):
+             # 偵測到需要救援，強制切換並標記為 emergency
              self._mode_manager.request_mode(Config.MODE_BLENDED, confidence=1.0, emergency=True)
              return
 
-        # [優先級 1] 危險 (Emergency)
+        # [優先級 1] 危險情境 (前車急煞、靜止物)
         if self._check_danger(radar_msg, v_kph, model_end_dist):
             self._mode_manager.request_mode(Config.MODE_BLENDED, confidence=1.0, emergency=True)
             return
 
-        # [優先級 2] 舒適減速
+        # [優先級 2] 舒適減速 (彎道或跟車)
         if self._urgency > 0.6:
             self._mode_manager.request_mode(Config.MODE_BLENDED, confidence=self._urgency)
             return
@@ -210,28 +224,67 @@ class AEM:
         # [優先級 3] 預設 ACC
         self._mode_manager.request_mode(Config.MODE_ACC, confidence=0.8)
 
-    # 判斷邏輯
-    def _check_bailout(self, v_kph, curvature_val, current_lat_error):
+    # -------------------------------------------------------------------------
+    # 核心修改：彎道救援判斷 (Undershooting + Lateral Error)
+    # -------------------------------------------------------------------------
+    def _check_bailout(self, v_kph, curvature_val, current_lat_error, path_x):
+        """
+        判斷是否需要彎道救援
+        條件：
+        1. 速度 > 30 km/h
+        2. 側向力過大 (防止嚴重失控)
+        3. [新增] 發生推頭現象 (Undershooting) 且 車道偏移過大
+        """
         if v_kph < Config.BAILOUT_SPEED_MIN: return False
 
         v_ego = v_kph / 3.6
         approx_k = 2.0 * curvature_val
         estimated_lat_g = (v_ego ** 2) * approx_k
 
-        # 條件 A: 側向力極大 (失控)
+        # 條件 A: 側向力極大 (保留此條件以防止物理極限失控)
         if estimated_lat_g > Config.BAILOUT_LAT_G: return True
 
-        # 條件 B: 彎中偏離 (推頭)
-        if estimated_lat_g > 0.9 and current_lat_error > Config.BAILOUT_LAT_ERROR: return True
+        # 條件 B: 車道偏移 + Undershooting (推頭)
+        # -----------------------------------------------------------
+        # 幾何原理說明：
+        # path_x 為正值 = 路徑在車身左側
+        # path_x 為負值 = 路徑在車身右側
+        #
+        # 若 path_near (近處) 與 path_far (遠處) 同號 (例如都是正值)，
+        # 代表車身位於彎道的外側 (Left Turn, Car on Right)。
+        # 這就是典型的 "Undershooting" (轉不過去，往外滑)。
+        #
+        # 相反地，若異號，代表車身在內側 (Cutting Corner)，通常較安全。
+        # -----------------------------------------------------------
+        try:
+            path_near = path_x[0]   # 車頭處的路徑偏差
+            path_far = path_x[20]   # 遠處的路徑 (約 1.5~2.0 秒處)
+
+            # 1. 判斷是否位於彎道外側 (同號相乘 > 0)
+            is_outside_curve = (path_near * path_far) > 0
+
+            # 2. 確認前方確實是彎道 (避免直路微小抖動誤判)
+            # path_far 絕對值大於 1.5m 才視為有效彎道
+            is_curving = abs(path_far) > 1.5 
+
+            # 3. 綜合判斷：
+            # - 當前偏移量 > 設定門檻 (BAILOUT_LAT_ERROR)
+            # - 位於彎道外側 (推頭)
+            # - 前方是彎道
+            if (current_lat_error > Config.BAILOUT_LAT_ERROR) and is_outside_curve and is_curving:
+                return True
+        except:
+            return False
 
         return False
 
     def _check_danger(self, radar_msg, v_kph, model_end_dist):
-        """危險情境檢查"""
+        """危險情境檢查 (Radar & Vision)"""
         if radar_msg is None: return False
         lead = radar_msg.leadOne
         v_ego = v_kph / 3.6
 
+        # 情況 1: 雷達丟失目標但視覺看到牆 (Ghost Target / Cut-out)
         if not lead.status:
             if v_kph > Config.RADAR_MISS_SPEED and model_end_dist < Config.RADAR_MISS_DIST:
                 return True
@@ -240,11 +293,13 @@ class AEM:
         d_lead = lead.dRel
         v_lead = lead.vLead
 
+        # 情況 2: 距離過近
         thresh_dist = Config.EMERGENCY_DIST_HIGHWAY if v_kph > Config.HIGHWAY_SPEED else Config.EMERGENCY_DIST_CITY
         if d_lead < thresh_dist:
             if (v_ego > v_lead) or (d_lead < Config.LEAD_CLOSE_DIST):
                 return True
 
+        # 情況 3: TTC (Time to Collision) 過短
         if v_ego > v_lead:
             ttc = d_lead / (v_ego - v_lead)
             if ttc < Config.TTC_EMERGENCY:
