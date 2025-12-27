@@ -1,9 +1,10 @@
 """
-Dynamic Turn Speed Controller (DTSC) - Robust Coordination Edition
-核心修復:
-1. 修正「條件執行漏洞」: 即使彎道不需減速，也會檢查並執行 SCDA 的減速需求。
-2. 修正「距離計算誤差」: 使用傳入的 GPS 真實距離 (scda_distance) 計算煞車力道。
+Dynamic Turn Speed Controller (DTSC) - Smart Log Edition
+功能更新:
+1. 智慧 Log: 只有在「真正介入減速」(G < -0.1) 時才寫入檔案，平時完全靜默。
+2. 頻率控制: 介入期間每 0.5 秒寫一次，避免拖慢系統。
 """
+import time
 import numpy as np
 from openpilot.selfdrive.modeld.constants import ModelConstants
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
@@ -55,7 +56,19 @@ HYSTERESIS_TIME = 0.5
 
 # --- SCDA 協調參數 ---
 SCDA_PRIORITY_MARGIN = 1.15  
-DEBUG_LOGGING = True  # 開啟 Log 以便您除錯
+
+# --- [Log] 寫入檔案函式 ---
+def write_file_log(msg):
+    """
+    將 Log 寫入 /data/media/0/dtsc_log.txt
+    只有在真正運作時才會呼叫此函式
+    """
+    try:
+        with open("/data/media/0/dtsc_log.txt", "a") as f:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            f.write(f"[{timestamp}] {msg}\n")
+    except Exception:
+        pass
 
 def clamp(x, low, high):
     return max(low, min(high, x))
@@ -72,6 +85,10 @@ class DTSC:
         self.hysteresis_timer = 0.0
         self.filtered_lat_limits = None
         self.lpf_reset_counter = 0 
+        
+        # Log 頻率計時器
+        self.last_log_time = 0.0
+
         if cp is not None:
             self.steer_ratio = cp.steerRatio
             self.wheelbase = cp.wheelbase
@@ -144,7 +161,7 @@ class DTSC:
 
     def get_mpc_constraints(self, model_msg, v_ego, base_a_min, base_a_max,
                             steer_angle_deg=0.0, steer_ratio=None, wheelbase=None, 
-                            scda_target_speed=None, scda_distance=None): # [接收 scda_distance]
+                            scda_target_speed=None, scda_distance=None):
         
         horizon_len = len(T_IDXS_MPC)
         a_min = np.ones(horizon_len) * (base_a_min if np.isscalar(base_a_min) else base_a_min[0])
@@ -183,11 +200,10 @@ class DTSC:
         final_required_decel = dt_decel if dt_mode == "EMERGENCY" else min(min(sp_decel, 0.0), min(dt_decel, 0.0))
         final_required_decel = clamp(final_required_decel, EMERGENCY_DECEL, 0.0)
 
-        # [修復] 使用 scda_distance 計算真實的減速需求
+        # [SCDA 整合邏輯]
         scda_required_decel = 0.0
         scda_active = False
         if scda_target_speed is not None and scda_target_speed < v_ego:
-            # 優先使用傳入的 GPS 距離，若無則用 MPC 最大視野 (兜底)
             calc_dist = scda_distance if scda_distance is not None else np.max(rel_pos)
             calc_dist = max(calc_dist, 1.0)
             
@@ -195,7 +211,6 @@ class DTSC:
             scda_required_decel = clamp(scda_required_decel, EMERGENCY_DECEL, 0.0)
             scda_active = True
             
-            # 如果 SCDA 需求比 DTSC 大，則加權
             if scda_required_decel < final_required_decel:
                 scda_required_decel *= SCDA_PRIORITY_MARGIN
 
@@ -214,12 +229,30 @@ class DTSC:
             pass_decel = final_required_decel if final_required_decel < 0 else 0.0
             critical_distance = rel_pos[critical_idx] if critical_idx is not None else np.max(rel_pos)
             
+            # --- [智慧 Log 邏輯] ---
+            # 頻率限制: 每 0.5 秒
+            current_time = time.monotonic()
+            if current_time - self.last_log_time > 0.5:
+                # 判定是誰導致的減速
+                reason = "DTSC"
+                actual_val = pass_decel
+                
+                if scda_active and scda_required_decel < pass_decel:
+                    reason = "SCDA"
+                    actual_val = scda_required_decel
+                
+                # [關鍵] 只有當「實際減速值」大於 -0.1 時才寫入
+                # 這樣避免了 hysteresis 期間的無效 Log
+                if actual_val < -0.1:
+                    log_msg = f"DTSC介入: 來源={reason} | 車速={v_ego*3.6:.0f} | 減速G={actual_val:.2f} | 彎道G={predicted_lat_acc_max:.2f}"
+                    write_file_log(log_msg)
+                    self.last_log_time = current_time
+            # ---------------------
+
             has_future_curve = any(rel_pos[i] > critical_distance and curvatures[i] > FUTURE_CURVE_THRESHOLD for i in range(horizon_len))
 
             for i in range(horizon_len):
                 if rel_pos[i] <= critical_distance + 1e-6:
-                    # [關鍵修復]
-                    # 不管 DTSC (pass_decel) 是否為 0，只要 SCDA 有需求，就取兩者最需要的那個 (最小值)
                     final_limit = pass_decel
                     if scda_active and scda_required_decel < final_limit:
                         final_limit = scda_required_decel
