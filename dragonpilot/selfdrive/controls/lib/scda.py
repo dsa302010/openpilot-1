@@ -8,6 +8,7 @@ SCDA (12) - Log Enhanced & Fully Commented Edition
 4. 通過後緩加速: 根據距離線性恢復速度
 5. 動態保持距離: 依車速調整通過後的鎖定距離 (25/50/75m)
 6. 雙重 Log: 支援 logcat 與 /data/media/0/scda_log.txt
+7. [新增] Log 開關控制: 支援 Master Switch 與 ACC On 檢查。
 """
 import os
 import csv
@@ -21,6 +22,9 @@ from openpilot.common.swaglog import cloudlog
 # =========================================
 MS_TO_KPH = 3.6           # [轉換係數] m/s -> km/h
 KPH_TO_MS = 1. / 3.6      # [轉換係數] km/h -> m/s
+
+# --- [新增] Log 總開關 ---
+MASTER_LOG_ENABLED = True  # True: 開啟寫入檔案, False: 完全停用
 
 # --- [設定] 安全參數 ---
 SAFETY_OFFSET = 20.0       # [參數] 安全忽略門檻 (km/h)
@@ -120,7 +124,8 @@ class SpeedCameraControl:
       if len(self.cameras) > 0:
           msg = f"SCDA: 載入成功，共 {len(self.cameras)} 支相機。"
           cloudlog.warning(msg)
-          write_file_log(msg) # 寫入文字檔 Log
+          if MASTER_LOG_ENABLED:
+              write_file_log(msg) # 寫入文字檔 Log
     except Exception:
       self.cameras = np.empty((0, 3))
 
@@ -134,7 +139,8 @@ class SpeedCameraControl:
         if self.ignore_index != self.active_index:
             msg = f"SCDA: 使用者踩油門，已取消相機 ID {self.active_index}"
             cloudlog.warning(msg)
-            write_file_log(msg)
+            if MASTER_LOG_ENABLED:
+                write_file_log(msg)
         # 設定忽略 ID
         self.ignore_index = self.active_index
 
@@ -157,7 +163,7 @@ class SpeedCameraControl:
     x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
     return (math.degrees(math.atan2(y, x)) + 360) % 360
 
-  def get_target_speed(self, v_ego_ms, v_cruise_ms, lat, lon, bearing_deg):
+  def get_target_speed(self, v_ego_ms, v_cruise_ms, lat, lon, bearing_deg, acc_enabled=False):
     """
     [核心邏輯] 計算目標速度
     回傳: 包含 target_speed 的字典
@@ -317,11 +323,12 @@ class SpeedCameraControl:
         if is_intervening or "忽略" in status or "回速" in status:
             log_msg = f"SCDA {status}: 限速{limit:.0f} | 距離{dist:.0f}m | 目標{final_target_kph:.0f}kph"
             
-            # 1. 輸出到 logcat (系統日誌)
+            # 1. 輸出到 logcat (系統日誌) - 保持總是輸出以利除錯
             cloudlog.warning(log_msg)
             
-            # 2. 輸出到文字檔 (方便查看)
-            write_file_log(log_msg)
+            # 2. 輸出到文字檔 (方便查看) - [新增] 只有在 Master Switch 和 ACC On 時寫入
+            if MASTER_LOG_ENABLED and acc_enabled:
+                write_file_log(log_msg)
 
     is_active = (min_dist_found < 9999.0 and final_target_kph < v_cruise_kph)
     
