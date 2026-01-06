@@ -19,10 +19,19 @@ ROAD_CAM = VisionStreamType.VISION_STREAM_ROAD
 WIDE_CAM = VisionStreamType.VISION_STREAM_WIDE_ROAD
 DEFAULT_DEVICE_CAMERA = DEVICE_CAMERAS["tici", "ar0231"]
 
+# --- 新增的 Helper Function: 用來動態降低亮度 ---
+def darken_color(color, factor):
+    """
+    將顏色變暗。
+    factor: 0.8 代表保留 80% 亮度 (即降低 20%)
+    """
+    return rl.Color(int(color.r * factor), int(color.g * factor), int(color.b * factor), color.a)
+
+# 使用 darken_color 函式處理原本的顏色
 BORDER_COLORS = {
-  UIStatus.DISENGAGED: rl.Color(0x17, 0x33, 0x49, 0xC8),   # Blue for disengaged state
-  UIStatus.OVERRIDE: rl.Color(0x91, 0x9B, 0x95, 0xF1),     # Gray for override state
-  UIStatus.ENGAGED: rl.Color(0x17, 0x86, 0x44, 0xF1),      # Green for engaged state
+  UIStatus.DISENGAGED: darken_color(rl.Color(0x17, 0x33, 0x49, 0xC8), 0.8),   # Blue for disengaged state (Darkened 20%)
+  UIStatus.OVERRIDE: darken_color(rl.Color(0x91, 0x9B, 0x95, 0xF1), 0.8),     # Gray for override state (Darkened 20%)
+  UIStatus.ENGAGED: darken_color(rl.Color(0x17, 0x86, 0x44, 0xF1), 0.8),      # Green for engaged state (Darkened 20%)
 }
 
 WIDE_CAM_MAX_SPEED = 10.0  # m/s (22 mph)
