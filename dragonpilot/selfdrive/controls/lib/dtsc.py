@@ -3,6 +3,7 @@ Dynamic Turn Speed Controller (DTSC) - Smart Log Edition
 功能更新:
 1. 智慧 Log: 只有在「真正介入減速」(G < -0.1) 時才寫入檔案，平時完全靜默。
 2. 頻率控制: 介入期間每 0.5 秒寫一次，避免拖慢系統。
+3. [新增] Log 開關控制: 支援 Master Switch 與 ACC On 檢查。
 """
 import time
 import numpy as np
@@ -15,6 +16,9 @@ from openpilot.common.swaglog import cloudlog
 # =============================
 MODEL_T_IDXS = ModelConstants.T_IDXS
 DT_MPC = 0.05
+
+# --- [新增] Log 總開關 ---
+MASTER_LOG_ENABLED = True  # True: 開啟寫入檔案, False: 完全停用
 
 # --- 彎道安全參數 ---
 BASE_LAT_ACC = 2.8
@@ -161,7 +165,7 @@ class DTSC:
 
     def get_mpc_constraints(self, model_msg, v_ego, base_a_min, base_a_max,
                             steer_angle_deg=0.0, steer_ratio=None, wheelbase=None, 
-                            scda_target_speed=None, scda_distance=None):
+                            scda_target_speed=None, scda_distance=None, acc_enabled=False):
         
         horizon_len = len(T_IDXS_MPC)
         a_min = np.ones(horizon_len) * (base_a_min if np.isscalar(base_a_min) else base_a_min[0])
@@ -241,9 +245,8 @@ class DTSC:
                     reason = "SCDA"
                     actual_val = scda_required_decel
                 
-                # [關鍵] 只有當「實際減速值」大於 -0.1 時才寫入
-                # 這樣避免了 hysteresis 期間的無效 Log
-                if actual_val < -0.1:
+                # [關鍵] 條件: 實際有減速 + ACC 開啟 + 總開關開啟
+                if actual_val < -0.1 and MASTER_LOG_ENABLED and acc_enabled:
                     log_msg = f"DTSC介入: 來源={reason} | 車速={v_ego*3.6:.0f} | 減速G={actual_val:.2f} | 彎道G={predicted_lat_acc_max:.2f}"
                     write_file_log(log_msg)
                     self.last_log_time = current_time
