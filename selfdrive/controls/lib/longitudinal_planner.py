@@ -337,9 +337,9 @@ class LongitudinalPlanner:
     if self.dtsc is not None:
         is_dtsc_active = getattr(self.dtsc, 'active', False)
 
-    # 如果 DTSC 正在介入 且 目標是減速，則允許更快的變化率 (0.2)
+    # 如果 DTSC 正在介入 且 目標是減速，則允許更快的變化率 (0.15)
     if is_dtsc_active and output_a_target < 0.0:
-        decel_slew_rate = 0.2
+        decel_slew_rate = 0.15
 
     for idx in range(2):
       # idx 0=min, 1=max
