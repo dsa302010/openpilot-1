@@ -236,7 +236,7 @@ class SpeedCameraControl:
       if dist > search_radius: continue
 
       # 視角過濾 (近距離 <=150m 時放寬至 20度)
-      allowed_angle = 20.0 if dist <= 150.0 else base_angle
+      allowed_angle = 30.0 if dist <= 150.0 else base_angle
       if math.isnan(bearing_deg): continue
       cam_bearing = self._bearing(lat, lon, cam_lat, cam_lon)
       diff_angle = abs(bearing_deg - cam_bearing)
