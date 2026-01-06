@@ -1,5 +1,12 @@
-dragonpilot 0.10.0 r2 (2025-12-04) FORK Herizon
+dragonpilot 0.10.0 r2 (2026-1-06) FORK Herizon
 =======================
+本程式針對  TOYOTA COROLLA CROSS 客製 其他車種請勿使用
+* ✨ 中文化:事件與培訓資料 (2026-1-6)
+* ✨ MODELS:Down to Ride v6 (2026-1-6)
+* ✨ LON: Adaptive Coasting Mode (ACM) (2025-11-17)
+* ✨ 🚧 LON: Adaptive Experimental Mode (AEM) (2025-12-09)
+* ✨ 🚧 LON: Dynamic Turn Speed Control (DTSC) (2025-12-09)
+* ✨ 🚧 LON: Speed Camera Deceleration Assist (SCDA) (2025-12-23)
 * ✅ openpilot 0.10.0 (devel-staging) (2025-08-06)
 * ✅ 🚧 Toyota: DSU Bypass Support by cydia2020 (Disabled, Code Change Requred) (2025-09-09)
 * ✅ Honda: EPS Mod Support (2025-09-09)
@@ -12,9 +19,6 @@ dragonpilot 0.10.0 r2 (2025-12-04) FORK Herizon
 * ✅ LAT: Road Edge Detection (2025-04-01)
 * ✅ LAT: LCA Speed Changer (2025-03-21)
 * ✅ LAT: ALKA (2025-03-14)
-* ✨ LON: Adaptive Coasting Mode (ACM) (2025-11-17)
-* ✨ 🚧 LON: Adaptive Experimental Mode (AEM) (2025-12-09)
-* ✨ 🚧 LON: Dynamic Turn Speed Control (DTSC) (2025-12-09)
 * ✅ LON: Ext Radar Support (2025-03-31)
 * ✅ MISC: Delay Starting Loggerd (2025-06-30)
 * ✅ MISC: Auto Shutdown (2025-04-28)
