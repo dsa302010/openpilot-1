@@ -5,6 +5,7 @@ Longitudinal Planner - Integrated Edition
 1. 整合 SCDA 與 DTSC，並啟用雙向通訊 (距離傳遞)。
 2. 包含踩油門取消 SCDA 的偵測邏輯。
 3. 包含詳細 Debug Log。
+4. [Mod] 放寬 DTSC 介入時的減速變化率限制 (Slew Rate)，解決減速無感問題。
 """
 import math
 import numpy as np
@@ -326,10 +327,33 @@ class LongitudinalPlanner:
       output_a_target = min(output_a_target_mpc, output_a_target_e2e)
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
 
+    # ============================================================
+    # [修改] 減速變化率動態調整 (DTSC 介入時放寬)
+    # ============================================================
+    decel_slew_rate = 0.05  # 預設舒適值
+    
+    # 檢查 DTSC 是否真的啟動中 (使用 getattr 防止模組未載入 crash)
+    is_dtsc_active = False
+    if self.dtsc is not None:
+        is_dtsc_active = getattr(self.dtsc, 'active', False)
+
+    # 如果 DTSC 正在介入 且 目標是減速，則允許更快的變化率 (0.2)
+    if is_dtsc_active and output_a_target < 0.0:
+        decel_slew_rate = 0.2
+
     for idx in range(2):
-      accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - 0.05, self.prev_accel_clip[idx] + 0.05)
+      # idx 0=min, 1=max
+      # 減速方向: 使用 decel_slew_rate (0.05 或 0.2)
+      # 加速方向: 固定維持 +0.05 (舒適性)
+      accel_clip[idx] = np.clip(
+          accel_clip[idx], 
+          self.prev_accel_clip[idx] - decel_slew_rate, 
+          self.prev_accel_clip[idx] + 0.05
+      )
+      
     self.output_a_target = np.clip(output_a_target, accel_clip[0], accel_clip[1])
     self.prev_accel_clip = accel_clip
+    # ============================================================
 
   def publish(self, sm, pm):
     plan_send = messaging.new_message('longitudinalPlan')
