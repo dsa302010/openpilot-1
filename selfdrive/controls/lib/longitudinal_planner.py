@@ -151,6 +151,9 @@ class LongitudinalPlanner:
 
   def update(self, sm, dp_flags = 0):
     mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
+    
+    # [新增] 獲取 OP 是否啟用 (ACC ON)
+    acc_enabled = sm['selfdriveState'].enabled
 
     if dp_flags & DPFlags.AEM:
       try:
@@ -190,7 +193,8 @@ class LongitudinalPlanner:
           if math.isnan(bearing): bearing = 0.0
           safe_v_ego = v_ego if not math.isnan(v_ego) else 0.0
 
-          scda_result = self.scda.get_target_speed(safe_v_ego, v_cruise, gps.latitude, gps.longitude, bearing)
+          # [修改] 傳遞 acc_enabled 狀態
+          scda_result = self.scda.get_target_speed(safe_v_ego, v_cruise, gps.latitude, gps.longitude, bearing, acc_enabled=acc_enabled)
           
           if isinstance(scda_result, dict):
               scda_target_ms = scda_result.get('target_speed')
@@ -254,7 +258,7 @@ class LongitudinalPlanner:
       try:
         steer_angle = sm['carState'].steeringAngleDeg
         
-        # [重要] 傳遞 scda_distance 給 DTSC
+        # [修改] 傳遞 acc_enabled 狀態
         a_min_dtsc, a_max_dtsc = self.dtsc.get_mpc_constraints(
           model_msg=sm['modelV2'], 
           v_ego=v_ego, 
@@ -264,7 +268,8 @@ class LongitudinalPlanner:
           steer_ratio=self.CP.steerRatio,
           wheelbase=self.CP.wheelbase,
           scda_target_speed=self.scda_target_speed,
-          scda_distance=self.scda_distance
+          scda_distance=self.scda_distance,
+          acc_enabled=acc_enabled
         )
         
         safe_len = min(len(a_min_dtsc), self.mpc.params.shape[0])
