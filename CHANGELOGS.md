@@ -7,7 +7,7 @@ dragonpilot 0.10.0 r2 (2026-1-06) FORK Herizon
 * ✨ LON: Adaptive Coasting Mode (ACM) (2025-11-17)
 * ✨ 🚧 LON: Adaptive Experimental Mode (AEM) (2025-12-09) 不支援紅綠燈 僅針對近距離危險情況切換實驗模式 如彎道衝出車道、視覺牆、車距過近
 * ✨ 🚧 LON: Dynamic Turn Speed Control (DTSC) (2025-12-09) 增強型彎道減速  針對時速55以下特別加強煞車力道 
-* ✨ 🚧 LON: Speed Camera Deceleration Assist (SCDA) (2025-12-23) 測速照相減速為了行車安全不保證減速成功 踩油門可略過當前測速照相
+* ✨ 🚧 LON: Speed Camera Deceleration Assist (SCDA) (2025-12-23) 此功能為了行車安全不保證減速成功 踩油門可略過當前測速照相
 * ✅ openpilot 0.10.0 (devel-staging) (2025-08-06)
 * ✅ 🚧 Toyota: DSU Bypass Support by cydia2020 (Disabled, Code Change Requred) (2025-09-09)
 * ✅ Honda: EPS Mod Support (2025-09-09)
