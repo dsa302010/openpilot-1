@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Longitudinal Planner - Integrated Edition
+Longitudinal Planner - Integrated Edition (Modified v2)
 功能:
 1. 整合 SCDA 與 DTSC，並啟用雙向通訊 (距離傳遞)。
 2. 包含踩油門取消 SCDA 的偵測邏輯。
 3. 包含詳細 Debug Log。
-4. [Mod] 放寬 DTSC 介入時的減速變化率限制 (Slew Rate)，解決減速無感問題。
+4. [Mod] 放寬 DTSC 與 SCDA 介入時的減速變化率限制 (Slew Rate)，解決減速無感問題。
+5. [Mod] 邏輯分離：DTSC 與 SCDA 變化率分開設定，同時介入時取最小值。
 """
 import math
 import numpy as np
@@ -108,6 +109,7 @@ class LongitudinalPlanner:
     self.scda_target_speed = None
     self.scda_distance = None      # 儲存 SCDA 距離供 DTSC 使用
     self.scda_limit = None
+    self.scda_active = False       # 儲存 SCDA 是否正在介入
     
     # Init modules
     if not DP_MODULES_AVAILABLE:
@@ -153,7 +155,7 @@ class LongitudinalPlanner:
   def update(self, sm, dp_flags = 0):
     mode = 'blended' if sm['selfdriveState'].experimentalMode else 'acc'
     
-    # [新增] 獲取 OP 是否啟用 (ACC ON)
+    # 獲取 OP 是否啟用 (ACC ON)
     acc_enabled = sm['selfdriveState'].enabled
 
     if dp_flags & DPFlags.AEM:
@@ -178,6 +180,7 @@ class LongitudinalPlanner:
     self.scda_target_speed = None
     self.scda_distance = None
     self.scda_limit = None
+    self.scda_active = False # [重設狀態]
     
     if (dp_flags & DPFlags.SCDA) and self.scda is not None and not self.scda_disabled:
       # 踩油門取消功能
@@ -194,14 +197,16 @@ class LongitudinalPlanner:
           if math.isnan(bearing): bearing = 0.0
           safe_v_ego = v_ego if not math.isnan(v_ego) else 0.0
 
-          # [修改] 傳遞 acc_enabled 狀態
+          # 傳遞 acc_enabled 狀態
           scda_result = self.scda.get_target_speed(safe_v_ego, v_cruise, gps.latitude, gps.longitude, bearing, acc_enabled=acc_enabled)
           
           if isinstance(scda_result, dict):
               scda_target_ms = scda_result.get('target_speed')
-              # [重要] 儲存距離供 DTSC 使用
+              # 儲存距離供 DTSC 使用
               self.scda_distance = scda_result.get('distance') 
               self.scda_limit = scda_result.get('limit')
+              # 獲取 SCDA 是否正在介入
+              self.scda_active = scda_result.get('is_active', False)
           else:
               scda_target_ms = scda_result
           
@@ -259,7 +264,7 @@ class LongitudinalPlanner:
       try:
         steer_angle = sm['carState'].steeringAngleDeg
         
-        # [修改] 傳遞 acc_enabled 狀態
+        # 傳遞 acc_enabled 狀態
         a_min_dtsc, a_max_dtsc = self.dtsc.get_mpc_constraints(
           model_msg=sm['modelV2'], 
           v_ego=v_ego, 
@@ -328,22 +333,41 @@ class LongitudinalPlanner:
       self.output_should_stop = output_should_stop_e2e or output_should_stop_mpc
 
     # ============================================================
-    # [修改] 減速變化率動態調整 (DTSC 介入時放寬)
+    # [修改] 減速變化率動態調整 (DTSC 與 SCDA 分開處理)
     # ============================================================
-    decel_slew_rate = 0.05  # 預設舒適值
+    default_slew_rate = 0.05
+    decel_slew_rate = default_slew_rate
     
-    # 檢查 DTSC 是否真的啟動中 (使用 getattr 防止模組未載入 crash)
+    # [設定區] 定義個別的變化率 (可在此處單獨修改數值)
+    dtsc_limit = 0.15
+    scda_limit = 0.15
+    
+    # 檢查 DTSC 狀態
     is_dtsc_active = False
     if self.dtsc is not None:
         is_dtsc_active = getattr(self.dtsc, 'active', False)
 
-    # 如果 DTSC 正在介入 且 目標是減速，則允許更快的變化率 (0.15)
-    if is_dtsc_active and output_a_target < 0.0:
-        decel_slew_rate = 0.15
+    # 判斷個別條件 (介入中 且 正在減速)
+    dtsc_condition = is_dtsc_active and output_a_target < 0.0
+    scda_condition = self.scda_active and output_a_target < 0.0
+
+    # 邏輯分流
+    if dtsc_condition and scda_condition:
+        # 同時介入：取兩者中的最低值 (最保守/數值最小)
+        decel_slew_rate = min(dtsc_limit, scda_limit)
+    elif dtsc_condition:
+        # 只有 DTSC
+        decel_slew_rate = dtsc_limit
+    elif scda_condition:
+        # 只有 SCDA
+        decel_slew_rate = scda_limit
+    else:
+        # 都沒有 (使用預設值)
+        decel_slew_rate = default_slew_rate
 
     for idx in range(2):
       # idx 0=min, 1=max
-      # 減速方向: 使用 decel_slew_rate (0.05 或 0.2)
+      # 減速方向: 使用計算出的 decel_slew_rate
       # 加速方向: 固定維持 +0.05 (舒適性)
       accel_clip[idx] = np.clip(
           accel_clip[idx], 
