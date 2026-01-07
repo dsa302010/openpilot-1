@@ -24,7 +24,7 @@ MASTER_LOG_ENABLED = True  # True: 開啟寫入檔案, False: 完全停用
 BASE_LAT_ACC = 2.8
 SAFETY_SPEED_FACTOR = 0.95
 LAT_LIMIT_BP = [5.0, 10.0, 15.0, 20.0, 25.0]
-LAT_LIMIT_V  = [2.0, 2.1, 2.4, 2.7, 2.8]
+LAT_LIMIT_V  = [2.0, 2.1, 2.2, 2.3, 2.3]
 
 # --- LPF ---
 LPF_ALPHA = 0.3
