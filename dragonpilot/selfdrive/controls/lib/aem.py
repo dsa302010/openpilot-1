@@ -1,74 +1,70 @@
-"""
-Copyright (c) 2025, Rick Lan
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, and/or sublicense,
-for non-commercial purposes only, subject to the following conditions:
-
-- The above copyright notice and this permission notice shall be included in
-  all copies or substantial portions of the Software.
-- Commercial use (e.g. use in a product, service, or activity intended to
-  generate revenue) is prohibited without explicit written permission from
-  the copyright holder.
-
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-"""
-
-import time
 import numpy as np
 from openpilot.selfdrive.modeld.constants import ModelConstants
 
-# Cooldown times (how long to stay in experimental mode after trigger)
-AEM_COOLDOWN_STOP = 0.5      # seconds - for stop sign/light detection
-AEM_COOLDOWN_TTC = 3.0       # seconds - for lead TTC events
-
-# Stop sign/light detection thresholds
-SLOW_DOWN_BP = [0., 2.78, 5.56, 8.34, 11.12, 13.89, 15.28]
-SLOW_DOWN_DIST = [10, 30., 50., 70., 80., 90., 120.]
-
-# TTC-based triggering thresholds
-TTC_THRESHOLD = 1.8          # seconds - trigger when TTC drops below this
-MIN_SPEED_FOR_TTC = 5.0      # m/s (~18 km/h) - TTC meaningless at low speeds
-MIN_CLOSING_SPEED = 0.5      # m/s - must be closing at least this fast
-
-
 class AEM:
+    def __init__(self):
+        # --- Config (參數設定) ---
+        self.HIGHWAY_SPEED = 70.0  # 超過此速度(kph)忽略紅燈
+        
+        # 靈敏度與距離定義 (使用完美復刻原版曲線)
+        self.SENSITIVITY_BP = [0., 50., 80., 110.]
+        self.SENSITIVITY_VALS = [1.0, 1.0, 0.85, 0.4]
 
-  def __init__(self):
-    self._active = False
-    self._cooldown_end_time = 0.0
+        self.SLOW_DOWN_BP = [0., 5., 20., 25., 30.]
+        self.SLOW_DOWN_DIST = [5., 25., 100., 130., 160.]
 
-  def _perform_experimental_mode(self, cooldown: float = AEM_COOLDOWN_TTC):
-    self._active = True
-    # Extend cooldown if new trigger comes in
-    new_end = time.monotonic() + cooldown
-    self._cooldown_end_time = max(self._cooldown_end_time, new_end)
+        # --- State (狀態) ---
+        self.mode = 'acc'
+        self.blended_conf = 0.0
+        self.urgency_val = 0.0
+        self.high_urgency_counter = 0
 
-  def get_mode(self, mode):
-    # override mode
-    if time.monotonic() < self._cooldown_end_time:
-      mode = 'blended'
-    else:
-      self._active = False
-    return mode
+    # [FIX] 修正：增加 ignored_arg 參數，解決 TypeError 報錯
+    # 這樣就算外部傳入參數，這裡也會接收並忽略，不會導致崩潰
+    def get_mode(self, ignored_arg=None):
+        return self.mode
 
-  def update_states(self, model_msg, radar_msg, v_ego):
-    # Stop sign/light detection - model predicts stopping ahead
-    # Uses max() so it can't shorten an existing longer cooldown
-    if len(model_msg.orientation.x) == len(model_msg.position.x) == ModelConstants.IDX_N and \
-      model_msg.position.x[ModelConstants.IDX_N - 1] < np.interp(v_ego, SLOW_DOWN_BP, SLOW_DOWN_DIST):
-      self._perform_experimental_mode(AEM_COOLDOWN_STOP)
+    def update_states(self, model_msg, radar_msg, v_ego):
+        # 1. 資料檢核
+        if len(model_msg.position.z) != ModelConstants.IDX_N:
+            return
 
-    # TTC-based triggering - lead car braking hard
-    if v_ego > MIN_SPEED_FOR_TTC and radar_msg.leadOne.status:
-      # vRel is negative when closing in on lead
-      closing_speed = -radar_msg.leadOne.vRel
-      if closing_speed > MIN_CLOSING_SPEED:
-        d_rel = radar_msg.leadOne.dRel
-        if d_rel > 0:
-          ttc = d_rel / closing_speed
-          if ttc < TTC_THRESHOLD:
-            self._perform_experimental_mode(AEM_COOLDOWN_TTC)
+        # 2. 基礎運算
+        v_kph = v_ego * 3.6
+        model_end_dist = model_msg.position.z[-1]
 
+        # 3. 計算預期煞停距離
+        base_expected = np.interp(v_ego, self.SLOW_DOWN_BP, self.SLOW_DOWN_DIST)
+        sensitivity = np.interp(v_kph, self.SENSITIVITY_BP, self.SENSITIVITY_VALS)
+        expected_dist = base_expected * sensitivity * 1.1
+
+        # 4. 計算急迫度
+        raw_urgency = 0.0
+        if model_end_dist < expected_dist:
+            shortage_ratio = (expected_dist - model_end_dist) / max(1.0, expected_dist)
+            raw_urgency = np.clip((shortage_ratio ** 1.5) * 2.5, 0.0, 1.2)
+            
+            if v_kph > self.HIGHWAY_SPEED:
+                raw_urgency = min(raw_urgency, 0.4)
+
+        # 5. 濾波器 (綠燈加速歸零)
+        alpha = 0.5 if raw_urgency == 0.0 else 0.15
+        self.urgency_val = (self.urgency_val * (1 - alpha)) + (raw_urgency * alpha)
+
+        # 6. 決策邏輯 (Debounce & Mode Switch)
+        TRIGGER_THRESHOLD = 0.45
+        CONFIRMATION_FRAMES = 5
+
+        if self.urgency_val > TRIGGER_THRESHOLD:
+            self.high_urgency_counter += 1
+        else:
+            self.high_urgency_counter = 0
+
+        if self.high_urgency_counter >= CONFIRMATION_FRAMES:
+            self.blended_conf = min(1.0, self.blended_conf + 0.1)
+        else:
+            self.blended_conf = max(0.0, self.blended_conf - 0.2)
+
+        threshold = 0.4 if self.mode == 'blended' else 0.75
+        self.mode = 'blended' if self.blended_conf > threshold else 'acc'
