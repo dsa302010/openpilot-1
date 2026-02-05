@@ -361,13 +361,13 @@ class LongitudinalMpc:
     # 2. 設定觸發條件：距離小於 STOP_DISTANCE * 1.25 (5.0 * 1.25 = 7.5m)
     if dist_to_lead < (STOP_DISTANCE * 1.25):
       # 定義限制值 (基於 CRUISE_MAX_ACCEL = 1.4)：
-      # 起步限制 (40%): 1.4 * 0.60 = 0.74 m/s^2 (模擬放煞車蠕行)
+      # 起步限制 (60%): 1.4 * 0.60 = 0.84 m/s^2 (模擬放煞車蠕行)
       # 低速限制 (80%): 1.4 * 0.80 = 1.12 m/s^2 (緩和加速)
       accel_limit_low = CRUISE_MAX_ACCEL * 0.60
       accel_limit_mid = CRUISE_MAX_ACCEL * 0.80
       
       # 3. 根據車速動態限制 (線性插值)
-      # v_ego: 0 m/s (0kph)  -> 40%
+      # v_ego: 0 m/s (0kph)  -> 60%
       # v_ego: 5 m/s (18kph) -> 80%
       # v_ego: >10 m/s (36kph) -> 恢復系統最大值 (ACCEL_MAX)
       current_accel_limit = np.interp(v_ego, [0.0, 5.0, 10.0], [accel_limit_low, accel_limit_mid, ACCEL_MAX])
