@@ -361,9 +361,9 @@ class LongitudinalMpc:
     # 2. 設定觸發條件：距離小於 STOP_DISTANCE * 1.25 (5.0 * 1.25 = 7.5m)
     if dist_to_lead < (STOP_DISTANCE * 1.25):
       # 定義限制值 (基於 CRUISE_MAX_ACCEL = 1.4)：
-      # 起步限制 (40%): 1.4 * 0.40 = 0.56 m/s^2 (模擬放煞車蠕行)
+      # 起步限制 (40%): 1.4 * 0.60 = 0.74 m/s^2 (模擬放煞車蠕行)
       # 低速限制 (80%): 1.4 * 0.80 = 1.12 m/s^2 (緩和加速)
-      accel_limit_low = CRUISE_MAX_ACCEL * 0.40
+      accel_limit_low = CRUISE_MAX_ACCEL * 0.60
       accel_limit_mid = CRUISE_MAX_ACCEL * 0.80
       
       # 3. 根據車速動態限制 (線性插值)
