@@ -78,13 +78,13 @@ def get_jerk_factor(personality=log.LongitudinalPersonality.standard):
 
 def get_T_FOLLOW(personality=log.LongitudinalPersonality.standard):
   if personality==log.LongitudinalPersonality.relaxed:
-    return 1.75
+    return 2.0
   elif personality==log.LongitudinalPersonality.standard:
     # [優化] 一般模式縮短跟車距離 (原 1.45)
-    return 1.45
+    return 1.50
   elif personality==log.LongitudinalPersonality.aggressive:
     # [優化] 激進模式更緊湊 (原 1.25)
-    return 1.25
+    return 1.00
   else:
     raise NotImplementedError("Longitudinal personality not supported")
 
@@ -358,8 +358,8 @@ class LongitudinalMpc:
     # 1. 取得最近前車的距離 (lead_xv 若無車會是 50m)
     dist_to_lead = min(lead_xv_0[0, 0], lead_xv_1[0, 0])
 
-    # 2. 設定觸發條件：距離小於 STOP_DISTANCE * 1.25 (5.0 * 1.5 = 7.5m)
-    if dist_to_lead < (STOP_DISTANCE * 1.5):
+    # 2. 設定觸發條件：距離小於 STOP_DISTANCE * 1.25 (5.0 * 1.25 = 7.5m)
+    if dist_to_lead < (STOP_DISTANCE * 1.25):
       # 定義限制值 (基於 CRUISE_MAX_ACCEL = 1.4)：
       # 起步限制 (40%): 1.4 * 0.40 = 0.56 m/s^2 (模擬放煞車蠕行)
       # 低速限制 (80%): 1.4 * 0.80 = 1.12 m/s^2 (緩和加速)
