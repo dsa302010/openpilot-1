@@ -369,8 +369,8 @@ class LongitudinalMpc:
       # 3. 根據車速動態限制 (線性插值)
       # v_ego: 0 m/s (0kph)  -> 60%
       # v_ego: 5 m/s (18kph) -> 80%
-      # v_ego: >10 m/s (36kph) -> 恢復系統最大值 (ACCEL_MAX)
-      current_accel_limit = np.interp(v_ego, [0.0, 5.0, 10.0], [accel_limit_low, accel_limit_mid, ACCEL_MAX])
+      # v_ego: >8 m/s (29kph) -> 恢復系統最大值 (ACCEL_MAX)
+      current_accel_limit = np.interp(v_ego, [0.0, 5.0, 8.0], [accel_limit_low, accel_limit_mid, ACCEL_MAX])
     else:
       # 距離足夠遠，維持全功率 (由系統上限 ACCEL_MAX 決定)
       current_accel_limit = ACCEL_MAX
