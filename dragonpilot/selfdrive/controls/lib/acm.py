@@ -174,11 +174,11 @@ class ACM:
     if self.current_pitch > PITCH_UPHILL_THRESHOLD or self.current_pitch < PITCH_DOWNHILL_THRESHOLD:
       return a_desired_trajectory
 
-    # 3. [Hybrid 油電修正] 相對速度保護
-    #    如果前車比我們快 (lead.vRel > 0.1)，代表距離正在拉開。
-    #    此時若限制加速，會導致油電車因動力延遲而產生「落後->暴衝」的震盪。
-    #    解決方案：前車加速離開時，直接放行，不限制加速。
-    if lead.vRel > 0.1:
+    # 3. [Hybrid 油電修正 + 靜止鎖定]
+    #    修改點：增加 (and lead.vLead > 0.2) 條件。
+    #    意義：只有當前車「真的在動」且「正在遠離」時，才解除 Soft Hold。
+    #    效果：防止前車靜止時，因雷達 vRel 雜訊跳動導致的「煞停後又蠕行」問題。
+    if lead.vRel > 0.1 and lead.vLead > 0.2:
         return a_desired_trajectory
 
     # 4. 計算 100% 理想安全距離
