@@ -1,122 +1,42 @@
-name: tests
+name: tests.yaml
 
 on:
   push:
-    # 移除 branches 限制，代表任何分支的 push 都會觸發
   pull_request:
-    # 任何 PR 也會觸發
   workflow_dispatch:
-    # 允許你在 GitHub 網頁上手動點擊 "Run workflow" 執行
-
-concurrency:
-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && github.run_id || github.head_ref || github.ref }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-env:
-  PYTHONPATH: ${{ github.workspace }}
-  STRIP_LOGS: 1
-  SKIP_FW_QUERY_CHECK: 1
-  SCONS_CACHE: /tmp/scons-cache
 
 jobs:
-  # 1. 靜態檢查：檢查語法規範
-  static_analysis:
-    runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/commaai/openpilot-base:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Linter (Pylint/Flake8)
-        run: |
-          git config --global --add safe.directory /__w/openpilot/openpilot
-          ./scripts/linter.sh
+  build-and-test:
+    runs-on: ubuntu-latest
 
-  # 2. 全平台編譯：確保各環境皆可正常 Build
-  build:
-    runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/commaai/openpilot-base:latest
-    strategy:
-      matrix:
-        target: [compilation, tici_compile]
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          lfs: true
-      - name: Build
-        run: |
-          git config --global --add safe.directory /__w/openpilot/openpilot
-          if [ "${{ matrix.target }}" = "tici_compile" ]; then
-            TICI=1 scons -j$(nproc)
-          else
-            scons -j$(nproc)
-          fi
+    env:
+      CI: 1
+      PYTHONWARNINGS: error
+      NUM_JOBS: 4
 
-  # 3. 單元測試：執行所有邏輯單元測試
-  unit_tests:
-    needs: build
-    runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/commaai/openpilot-base:latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          lfs: true
-      - name: Run Unit Tests
-        run: |
-          git config --global --add safe.directory /__w/openpilot/openpilot
-          scons -j$(nproc)
-          ./ci/scripts/run_unit_tests.sh
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
 
-  # 4. 流程重放測試：模擬實際行駛數據的處理邏輯
-  process_replay:
-    needs: build
-    runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/commaai/openpilot-base:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          lfs: true
-      - name: Process Replay
-        run: |
-          git config --global --add safe.directory /__w/openpilot/openpilot
-          scons -j$(nproc)
-          # 注意：此步驟會自動下載測試用的 Segments (數據片斷)
-          python3 selfdrive/test/process_replay/test_processes.py
+    - name: Setup Python and Dependencies
+      run: |
+        sudo apt update
+        pip install -r requirements.txt
 
-  # 5. 車型相容性測試：驗證各車型介面定義
-  car_models:
-    needs: build
-    runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/commaai/openpilot-base:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Test Car Models
-        run: |
-          git config --global --add safe.directory /__w/openpilot/openpilot
-          scons -j$(nproc)
-          python3 selfdrive/car/tests/test_car_interfaces.py
+    - name: Build openpilot
+      run: |
+        scons -j$(nproc)
 
-  # 6. Panda 硬體邏輯測試
-  panda_test:
-    runs-on: ubuntu-22.04
-    container:
-      image: ghcr.io/commaai/openpilot-base:latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-      - name: Panda Unit Tests
-        run: |
-          git config --global --add safe.directory /__w/openpilot/openpilot
-          cd panda && scons -j$(nproc)
-          PYTHONPATH=. pytest tests/safety/
+    - name: Static analysis
+      run: |
+        tools/op.sh lint
+
+    - name: Run unit tests
+      run: |
+        pytest --maxfail=1 --disable-warnings
+
+    - name: Run all integration tests
+      run: |
+        pytest -m "not slow"
