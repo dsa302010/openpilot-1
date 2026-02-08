@@ -6,7 +6,7 @@ from openpilot.common.swaglog import cloudlog
 # ==============================================================================
 # [移植注意] 引入 MPC 函式庫
 # 目的：為了計算與 MPC 一致的「安全跟車距離」，必須引用 long_mpc 的物理常數與公式。
-# 若路徑不同，請修改此處 import 路徑。
+# 若您的 openpilot 版本路徑不同，請修改此處 import 路徑。
 # ==============================================================================
 from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
   COMFORT_BRAKE, STOP_DISTANCE, get_safe_obstacle_distance, 
@@ -27,19 +27,20 @@ SPEED_OFFSET_MAX_DOWNHILL_KPH = 5.0
 PITCH_UPHILL_THRESHOLD = 0.015    
 PITCH_DOWNHILL_THRESHOLD = -0.030 
 
-# --- 3. Soft Hold (防點頭) 參數 ---
+# --- 3. Soft Hold (防點頭/跟車優化) 參數 ---
 # 作用：在進入急煞區(DANGER_ZONE)之前，提早強迫滑行
-SOFT_HOLD_ACCEL = -0.00       # 強制加速度上限 (0.0=滑行)
+SOFT_HOLD_ACCEL = -0.00       # 強制加速度上限 (0.0=滑行, 負值=微煞)
 SOFT_HOLD_RANGE_MIN = 0.76    # 觸發下限：76% 安全距離 (低於此值交給 MPC 急煞)
 SOFT_HOLD_RANGE_MAX = 1.00    # 觸發上限：100% 安全距離
 
-# --- 4. Soft Stop (防頓挫) 參數 ---
-# 作用：低速煞停時限制最大減速度，避免點頭
+# --- 4. Soft Stop (煞停防頓挫) 參數 ---
+# 作用：低速煞停時限制最大減速度，避免最後一刻點頭
 SOFT_STOP_SPEED_MAX = 5.0     # 啟用速度：< 5 m/s (18 km/h)
-SOFT_STOP_MAX_DECEL = -1.50   # 最大煞車力道限制
-SOFT_STOP_RANGE_CRITICAL = 0.60 # 緊急界線：距離剩 60% 時取消限制
+SOFT_STOP_MAX_DECEL = -1.35   # 最大煞車力道限制 (太小會煞不住，太大会頓挫)
+# [安全調整] 原為 0.50，建議改為 0.65 (約 4公尺)，提早交還控制權給 MPC 以確保安全
+SOFT_STOP_RANGE_CRITICAL = 0.65 
 
-# --- 5. 其他常數 ---
+# --- 5. 其他系統常數 ---
 TTC_BP = [10., 30.]
 TTC_V  = [2.0, 3.0]
 EMERGENCY_TTC = 2.0
@@ -68,7 +69,7 @@ class ACM:
     self.personality = log.LongitudinalPersonality.standard
 
   # ============================================================================
-  # 邏輯區塊 1: 狀態更新與 ACM 啟用判斷
+  # 邏輯區塊 1: ACM 狀態更新與啟用判斷 (遠距離/無車時的滑行)
   # ============================================================================
   def _check_emergency_conditions(self, lead, v_ego, current_time):
     if not lead or not lead.status:
@@ -127,7 +128,7 @@ class ACM:
             not in_cooldown and
             self._is_in_coast_window)
 
-  # [移植注意] update_states 介面變更：必須傳入 personality
+  # [移植注意] update_states 介面變更：必須傳入 personality 參數
   def update_states(self, cc, rs, user_ctrl_lon, v_ego, v_cruise, personality=log.LongitudinalPersonality.standard):
     self.personality = personality # 儲存當前 OP 的駕駛風格設定
     
@@ -192,7 +193,7 @@ class ACM:
     t_follow = get_T_FOLLOW(self.personality)
     desired_dist = get_safe_obstacle_distance(v_ego, t_follow)
     
-    # 計算前車等效障礙物距離
+    # 計算前車等效障礙物距離 (包含停止距離緩衝)
     lead_obstacle_dist = lead.dRel + get_stopped_equivalence_factor(lead.vLead)
 
     # 6. 計算距離比例 (Ratio = 實際距離 / 理想距離)
@@ -206,11 +207,20 @@ class ACM:
     #    動作：限制正向加速度上限為 0 (強制滑行)
     #    目的：在進入 MPC 急煞區前先滑行減速，避免稍後重煞。
     if SOFT_HOLD_RANGE_MIN < ratio < SOFT_HOLD_RANGE_MAX:
+      
+      # [安全措施] 系統煞車優先原則
+      # 檢查：如果 MPC 原始軌跡的最大值都小於 0 (代表全段都在煞車)，
+      # 則直接回傳原始軌跡，取消滑行邏輯，確保煞車指令不被干擾。
+      if np.max(a_desired_trajectory) < 0:
+        return a_desired_trajectory
+
+      # 執行限制：將加速度上限設為 0 (滑行)
+      # np.minimum 會保留原本的負值(煞車)，只把正值(加速)壓下來。
       a_desired_trajectory = np.minimum(a_desired_trajectory, SOFT_HOLD_ACCEL)
 
     # --- 邏輯 B: Soft Stop (防止低速煞停頓挫) ---
-    #    條件：低速 (<18kph) 且 距離尚可 (>50%)
-    #    動作：限制最大煞車力道 (不能煞太猛)
+    #    條件：低速 (<18kph) 且 距離尚可 (>65%)
+    #    動作：限制最大煞車力道 (不能煞太猛)，但保留緊急時(距離<65%)的急煞能力。
     if (v_ego < SOFT_STOP_SPEED_MAX) and (ratio > SOFT_STOP_RANGE_CRITICAL):
         # np.maximum 限制負值不要太負 (例如 -3.0 -> -1.35)
         a_desired_trajectory = np.maximum(a_desired_trajectory, SOFT_STOP_MAX_DECEL)
@@ -220,7 +230,7 @@ class ACM:
   # ============================================================================
   # 邏輯區塊 3: 軌跡修正入口
   # ============================================================================
-  # [移植注意] 此函式需在 long_mpc.py 或 planner 中被呼叫
+  # [移植注意] 此函式需在 longitudinal_planner.py 中被呼叫
   def update_a_desired_trajectory(self, a_desired_trajectory, v_ego=0.0, lead=None):
     
     traj = a_desired_trajectory
