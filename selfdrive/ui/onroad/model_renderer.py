@@ -284,14 +284,29 @@ class ModelRenderer(Widget):
 
     return LeadVehicle(glow=glow, chevron=chevron, fill_alpha=int(fill_alpha), d_rel=d_rel, x=x, y=y, sz=sz, v_rel=v_rel)
 
+  # 盲點偵測到後顯示橘色車道線
+  def get_lane_line_color(self, line) -> rl.Color:
+      sm = ui_state.sm
+      carState = sm['carState']
+
+      alpha = np.clip(self._lane_line_probs[line], 0.0, 0.7)
+      color = rl.Color(255, 255, 255, int(alpha * 255))
+
+      if (carState.leftBlindspot and line == 1) or \
+         (carState.rightBlindspot and line == 2):
+         color = rl.Color(255, 165, 0, 255)  # 橘色，alpha=255 不透明
+
+      return color
+
   def _draw_lane_lines(self):
     """Draw lane lines and road edges"""
     for i, lane_line in enumerate(self._lane_lines):
       if lane_line.projected_points.size == 0:
         continue
 
-      alpha = np.clip(self._lane_line_probs[i], 0.0, 0.7)
-      color = rl.Color(255, 255, 255, int(alpha * 255))
+      # alpha = np.clip(self._lane_line_probs[i], 0.0, 0.7)
+      #color = rl.Color(255, 255, 255, int(alpha * 255))
+      color = self.get_lane_line_color(i)
       draw_polygon(self._rect, lane_line.projected_points, color)
 
     for i, road_edge in enumerate(self._road_edges):
