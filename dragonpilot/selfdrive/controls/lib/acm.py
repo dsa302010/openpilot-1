@@ -47,7 +47,7 @@ TTC_THRESHOLD_VALS     = [2.0,  2.5]   # [s]   對應的 TTC 秒數
 # 低速 (<36kph) 允許 1.0 m/s^2 -> 塞車時起步要靈活
 # 高速 (>90kph) 限制 0.4 m/s^2 -> 高速接近前車時要非常溫柔
 LIMIT_BP_SPEED         = [10.0, 25.0]  # [m/s] 36kph, 90kph
-LIMIT_ACCEL_VALS       = [1.0,  0.4]   # [m/s^2] 對應的最大加速度
+LIMIT_ACCEL_VALS       = [1.5,  0.5]   # [m/s^2] 對應的最大加速度
 
 # --- 6. 其他常數 ---
 TTC_BP = [10., 30.]
