@@ -34,16 +34,16 @@ LAT_LIMIT_BP = [5.0, 7.5, 10.0, 12.5, 15.0, 17.5, 20.0, 25.0, 30.0]
 # 1.6 m/s² ≈ 0.16G (舒適)
 # 2.0 m/s² ≈ 0.20G (一般過彎)
 # 2.3 m/s² ≈ 0.23G (稍微激進)
-LAT_LIMIT_V  = [1.9, 1.9, 2.0,  2.0,  2.2,  2.3,  2.3,  2.3,  2.3]
+LAT_LIMIT_V  = [1.8, 1.9, 2.0,  2.0,  2.1,  2.2,  2.3,  2.4,  2.5]
 
 # --- 2. 5段式漸進減速邏輯 (DECEL) ---
 # 用途：當預測的側向 G 值超過多少時，需要減速多少
 # BP: 預測的側向加速度 (m/s²)
 # V : 對應的減速度 (m/s²), 負值代表煞車
 DECEL_BP = np.array([1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.3, 2.6, 3.0])
-DECEL_V  = np.array([0.0, -0.2, -0.5, -0.9, -1.2, -1.5, -1.8, -2.1, -2.4])
+DECEL_V  = np.array([0.0, -0.2, -0.5, -0.9, -1.2, -1.5, -1.8, -2.1, -2.5])
 # --- 減速度與遲滯限制 ---
-MAX_COMFORT_DECEL = -2.0       # 最大舒適減速度 (-2.0 m/s²)
+MAX_COMFORT_DECEL = -2.0       # 最大舒適減速度 (-3.0 m/s²)
 EMERGENCY_DECEL   = -3.0       # 緊急減速極限
 MIN_CURVE_DISTANCE = 10.0      # 彎道距離小於 10m 視為緊急
 MAX_EXIT_ACCEL = 0.4           # 出彎最大加速度
@@ -67,17 +67,17 @@ OUTER_GAIN_PER_10CM = 0.4      # 每偏 10cm 增加的煞車力道 (很強)
 OUTER_MAX_DECEL = -3.5         # 外拋最大修正減速 (強力煞車)
 
 # --- 濾波器與防抖動參數 ---
-LPF_ALPHA = 0.15                
-LPF_RESET_TIME = 2.0           
-LPF_RESET_LAT_ACC_THRESHOLD = 0.3 
+LPF_ALPHA = 0.15
+LPF_RESET_TIME = 2.0
+LPF_RESET_LAT_ACC_THRESHOLD = 0.3
 
 # --- 誤判防護 ---
-PERSISTENCE_MIN_FRAC = 0.6     
-CURVATURE_MIN_FOR_PERSIST = 0.01 
-SHORT_DIST_IGNORE = 3.5        
-SCCV_ABORT_PRED_LAT_ACC_TH = 0.7 
-FUTURE_CURVE_THRESHOLD = 0.015 
-HYSTERESIS_TIME = 1.5          
+PERSISTENCE_MIN_FRAC = 0.6
+CURVATURE_MIN_FOR_PERSIST = 0.01
+SHORT_DIST_IGNORE = 3.5
+SCCV_ABORT_PRED_LAT_ACC_TH = 0.7
+FUTURE_CURVE_THRESHOLD = 0.015
+HYSTERESIS_TIME = 1.5
 
 # =============================
 # 工具函式
@@ -127,12 +127,12 @@ class DTSC:
     def _compute_model_arrays(self, model_msg):
         v_arr = np.array(model_msg.velocity.x)
         pos_x_arr = np.array(model_msg.position.x)
-        pos_y_arr = np.array(model_msg.position.y) 
+        pos_y_arr = np.array(model_msg.position.y)
         yaw_arr = np.array(model_msg.orientationRate.z)
 
         v_pred = np.interp(T_IDXS_MPC, MODEL_T_IDXS, v_arr)
         pos_x = np.interp(T_IDXS_MPC, MODEL_T_IDXS, pos_x_arr)
-        pos_y = np.interp(T_IDXS_MPC, MODEL_T_IDXS, pos_y_arr) 
+        pos_y = np.interp(T_IDXS_MPC, MODEL_T_IDXS, pos_y_arr)
         yaw = np.interp(T_IDXS_MPC, MODEL_T_IDXS, yaw_arr)
 
         rel_pos = pos_x - pos_x[0]
@@ -153,7 +153,7 @@ class DTSC:
         current_lat_limits = np.maximum(self.filtered_lat_limits, 1.0)
         v_clip = np.clip(v_pred, 1.0, 100.0)
         curvatures = np.abs(yaw_rates / v_clip)
-        
+
         # 核心公式：V_max = sqrt( a_lat_max / curvature )
         # 計算出在 G 值天花板限制下的最高安全速度
         safe_speeds = np.sqrt(current_lat_limits / (curvatures + 1e-6)) * SAFETY_SPEED_FACTOR
@@ -191,7 +191,7 @@ class DTSC:
         a_max = np.array(base_a_max) if not np.isscalar(base_a_max) else np.ones(horizon_len) * base_a_max
 
         if not self._is_model_valid(model_msg):
-            self.filtered_lat_limits = None 
+            self.filtered_lat_limits = None
             self.lpf_reset_timer = 0
             self.active = False
             return a_min, a_max
@@ -212,7 +212,7 @@ class DTSC:
         if len(safe_speeds) > 0:
             self.suggested_speed = float(np.min(safe_speeds))
 
-        sp_decel = self._compute_sp_decel(predicted_lat_acc_max) 
+        sp_decel = self._compute_sp_decel(predicted_lat_acc_max)
         dt_decel, critical_idx, dt_mode = self._compute_dtsc_decel(v_ego, v_pred, rel_pos, safe_speeds)
 
         speed_excess = v_pred - safe_speeds
@@ -225,7 +225,7 @@ class DTSC:
         if predicted_lat_acc_max < SCCV_ABORT_PRED_LAT_ACC_TH:
             dt_decel = sp_decel = 0.0
             dt_mode = None
-            self.suggested_speed = 255.0 
+            self.suggested_speed = 255.0
         elif not persistence_ok and critical_dist < SHORT_DIST_IGNORE:
             dt_decel = sp_decel = 0.0
             dt_mode = None
@@ -237,9 +237,9 @@ class DTSC:
         # ==========================================================
         # [8. 智慧備援機制 (Smart Backup v25)]
         # ==========================================================
-        check_idx = 5 
-        current_y = pred_y[check_idx]      
-        current_yaw = yaw_rates[check_idx] 
+        check_idx = 5
+        current_y = pred_y[check_idx]
+        current_yaw = yaw_rates[check_idx]
         current_lane_deviation = abs(current_y)
         backup_triggered = False
 
@@ -248,14 +248,14 @@ class DTSC:
 
         # (2) 設定參數
         if is_cutting_corner:
-            actual_dev_th = INNER_DEV_TH        
-            gain_per_10cm = INNER_GAIN_PER_10CM 
-            max_backup_decel = INNER_MAX_DECEL  
+            actual_dev_th = INNER_DEV_TH
+            gain_per_10cm = INNER_GAIN_PER_10CM
+            max_backup_decel = INNER_MAX_DECEL
             dev_type_str = "切西瓜(Inner)"
         else:
-            actual_dev_th = OUTER_DEV_TH        
-            gain_per_10cm = OUTER_GAIN_PER_10CM 
-            max_backup_decel = OUTER_MAX_DECEL  
+            actual_dev_th = OUTER_DEV_TH
+            gain_per_10cm = OUTER_GAIN_PER_10CM
+            max_backup_decel = OUTER_MAX_DECEL
             dev_type_str = "外拋(Outer)⚠️"
 
         # (3) 觸發與計算

@@ -22,7 +22,7 @@ def _create_radar_can_parser(car_fingerprint):
   return CANParser(DBC[car_fingerprint][Bus.radar], messages, 1)
 
 class RadarInterface(RadarInterfaceBase):
-  # 【dp 修改】: 移除 CP_SP 參數，只保留 CP，避免 TypeError
+  # 【修正】: 移除 CP_SP 參數，只保留 CP，避免 TypeError
   def __init__(self, CP):
     super().__init__(CP)
     self.track_id = 0
@@ -65,12 +65,11 @@ class RadarInterface(RadarInterfaceBase):
       if ii in self.RADAR_A_MSGS:
         cpt = self.rcp.vl[ii]
 
-        # 【dp 修改】: 加入雷達點過濾邏輯
-        # 超過 255m 或偵測到新軌跡時重置計數器
+        # 【保留原邏輯】: 超過 255m 視為無效並重置計數器
         if cpt['LONG_DIST'] >= 255 or cpt['NEW_TRACK']:
-          self.valid_cnt[ii] = 0
-        
-        # 只有在有效測量且距離合理時增加計數
+          self.valid_cnt[ii] = 0    # reset counter
+
+        # 【保留原邏輯】: 只有距離小於 255m 才增加有效計數
         if cpt['VALID'] and cpt['LONG_DIST'] < 255:
           self.valid_cnt[ii] += 1
         else:
@@ -78,13 +77,15 @@ class RadarInterface(RadarInterfaceBase):
 
         score = self.rcp.vl[ii+16]['SCORE']
 
-        # 【dp 修改】: 判定邏輯結合有效計數器與分數
+        # radar point only valid if it's a valid measurement and score is above 50
+        # 【保留原邏輯】: 距離檢查維持 255
         if cpt['VALID'] or (score > 50 and cpt['LONG_DIST'] < 255 and self.valid_cnt[ii] > 0):
           if ii not in self.pts or cpt['NEW_TRACK']:
             self.pts[ii] = RadarData.RadarPoint()
             self.pts[ii].trackId = self.track_id
             self.track_id += 1
-          
+
+          # 這裡的值已經是經過新 DBC 高精度轉換後的結果
           self.pts[ii].dRel = cpt['LONG_DIST']
           self.pts[ii].yRel = -cpt['LAT_DIST']
           self.pts[ii].vRel = cpt['REL_SPEED']

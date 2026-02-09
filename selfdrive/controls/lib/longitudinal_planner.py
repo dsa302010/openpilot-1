@@ -1,3 +1,5 @@
+
+
 #!/usr/bin/env python3
 import math
 import numpy as np
@@ -145,7 +147,6 @@ class LongitudinalPlanner:
     self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
     # Parse model needs to be assigned to variables if we want to use them (though new MP doesn't pass them to update explicitly)
     x, v, a, j, throttle_prob = self.parse_model(sm['modelV2'])
-    
     # Don't clip at low speeds since throttle_prob doesn't account for creep
     self.allow_throttle = throttle_prob > ALLOW_THROTTLE_THRESHOLD or v_ego <= MIN_ALLOW_THROTTLE_SPEED
 
@@ -184,10 +185,7 @@ class LongitudinalPlanner:
         self.mpc.params[i, 1] = target_max
     # ============================================================
 
-    # Note: New OpenPilot update signature uses personality. 
-    # DragonPilot old logic passed x,v,a,j. Newer LongMPC likely pulls from radar/model internally or via other means.
-    # We use the stock update call but with the DTSC constraints applied above.
-    self.mpc.update(sm['radarState'], v_cruise, personality=sm['selfdriveState'].personality)
+    self.mpc.update(sm['radarState'], v_cruise, x, v, a, j, personality=sm['selfdriveState'].personality)
 
     self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
     self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
@@ -198,16 +196,9 @@ class LongitudinalPlanner:
     # ============================================================
     if dp_flags & DPFlags.ACM:
       user_control = long_control_off if self.CP.openpilotLongitudinalControl else not sm['selfdriveState'].enabled
-      
-      self.acm.update_states(sm['carControl'], sm['radarState'], user_control, v_ego, v_cruise, 
-                             personality=sm['selfdriveState'].personality)
-      
-      self.a_desired_trajectory = self.acm.update_a_desired_trajectory(
-          self.a_desired_trajectory,
-          v_ego=v_ego,
-          lead=sm['radarState'].leadOne
-      )
-    # ============================================================
+      self.acm.update_states(sm['carControl'], sm['radarState'], user_control, v_ego, v_cruise)
+      self.a_desired_trajectory = self.acm.update_a_desired_trajectory(self.a_desired_trajectory)
+    self.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC[:-1], self.mpc.j_solution)
 
     # TODO counter is only needed because radar is glitchy, remove once radar is gone
     self.fcw = self.mpc.crash_cnt > 2 and not sm['carState'].standstill
@@ -238,8 +229,9 @@ class LongitudinalPlanner:
     # ============================================================
     # DP [第三層：快速響應通道] (Slew Rate Fix)
     # ============================================================
-    decel_slew_rate = 0.05 
-    
+    decel_slew_rate = 0.05 # 預設舒適值 (一般 ACC 模式非常柔和)
+
+    # 1. 檢查 DTSC 是否正在介入
     is_dtsc_active = False
     if dp_flags & DPFlags.DTSC:
         is_dtsc_active = getattr(self.dtsc, 'active', False)
@@ -248,9 +240,9 @@ class LongitudinalPlanner:
     is_dtsc_braking = (is_dtsc_active and output_a_target < 0.0)
 
     if is_dtsc_braking:
-        decel_slew_rate = 0.10  
+        decel_slew_rate = 0.10  # DTSC 最緊急，給予最大權限 (0.15)
     elif is_aem_braking:
-        decel_slew_rate = 0.05 
+        decel_slew_rate = 0.05 # AEM/實驗模式，為了紅燈煞停精準度，比 ACC 兇一點
 
     for idx in range(2):
       accel_clip[idx] = np.clip(accel_clip[idx], self.prev_accel_clip[idx] - decel_slew_rate, self.prev_accel_clip[idx] + 0.05)
