@@ -45,7 +45,7 @@ SOFT_STOP_DECEL_V  = [-1.5, -1.5,  -2.5, -5.0]   # [m/s^2] 限制值
 
 # 安全紅線：若觸發以下任一條件，限制立即失效
 SOFT_STOP_RANGE_CRITICAL = 0.60  # 距離剩 60%
-SOFT_STOP_TTC_CRITICAL   = 2.0   # TTC 剩 2.0秒
+SOFT_STOP_TTC_CRITICAL   = 1.0   # TTC 剩 1.0秒
 
 # --- 5. [保留] 動態 TTC 限制參數 (台灣路況優化版) ---
 # (A) TTC 觸發門檻
