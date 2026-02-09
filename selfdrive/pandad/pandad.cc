@@ -41,8 +41,6 @@
 #define CUTOFF_IL 400
 #define SATURATE_IL 1000
 
-#define ALT_EXP_MADS_DISENGAGE_LATERAL_ON_BRAKE 2048
-
 ExitHandler do_exit;
 
 bool check_all_connected(const std::vector<Panda *> &pandas) {
@@ -53,18 +51,6 @@ bool check_all_connected(const std::vector<Panda *> &pandas) {
     }
   }
   return true;
-}
-
-bool process_mads_heartbeat(SubMaster *sm) {
-  const int &alt_exp = (*sm)["carParams"].getCarParams().getAlternativeExperience();
-  const bool disengage_lateral_on_brake = (alt_exp & ALT_EXP_MADS_DISENGAGE_LATERAL_ON_BRAKE) != 0;
-
-  const auto &mads = (*sm)["selfdriveStateSP"].getSelfdriveStateSP().getMads();
-  const bool heartbeat_type = disengage_lateral_on_brake ? mads.getActive() : mads.getEnabled();
-
-  const bool engaged = sm->allAliveAndValid({"selfdriveStateSP"}) && heartbeat_type;
-
-  return engaged;
 }
 
 Panda *connect(std::string serial="", uint32_t index=0) {
@@ -83,13 +69,6 @@ Panda *connect(std::string serial="", uint32_t index=0) {
 
   for (int i = 0; i < PANDA_CAN_CNT; i++) {
     panda->set_can_fd_auto(i, true);
-  }
-
-  bool is_supported_panda = std::find(SUPPORTED_PANDA_TYPES.begin(), SUPPORTED_PANDA_TYPES.end(), panda->hw_type) != SUPPORTED_PANDA_TYPES.end();
-
-  if (!is_supported_panda) {
-    LOGW("panda %s is not supported (hw_type: %i), skipping firmware check...", panda->hw_serial().c_str(), static_cast<uint16_t>(panda->hw_type));
-    return panda.release();
   }
 
   if (!panda->up_to_date() && !getenv("BOARDD_SKIP_FW_CHECK")) {
@@ -208,7 +187,7 @@ void fill_panda_can_state(cereal::PandaState::PandaCanState::Builder &cs, const 
   cs.setCanCoreResetCnt(can_health.can_core_reset_cnt);
 }
 
-std::optional<bool> send_panda_states(PubMaster *pm, const std::vector<Panda *> &pandas, bool is_onroad, bool spoofing_started, bool always_offroad) {
+std::optional<bool> send_panda_states(PubMaster *pm, const std::vector<Panda *> &pandas, bool is_onroad, bool spoofing_started) {
   bool ignition_local = false;
   const uint32_t pandas_cnt = pandas.size();
 
@@ -256,7 +235,7 @@ std::optional<bool> send_panda_states(PubMaster *pm, const std::vector<Panda *> 
       health.ignition_line_pkt = 0;
     }
 
-    ignition_local |= ((health.ignition_line_pkt != 0) || (health.ignition_can_pkt != 0)) && !always_offroad;
+    ignition_local |= ((health.ignition_line_pkt != 0) || (health.ignition_can_pkt != 0));
 
     pandaStates.push_back(health);
   }
@@ -344,14 +323,14 @@ void send_peripheral_state(Panda *panda, PubMaster *pm) {
   pm->send("peripheralState", msg);
 }
 
-void process_panda_state(std::vector<Panda *> &pandas, PubMaster *pm, bool engaged, bool engaged_mads, bool is_onroad, bool spoofing_started, bool always_offroad) {
+void process_panda_state(std::vector<Panda *> &pandas, PubMaster *pm, bool engaged, bool is_onroad, bool spoofing_started) {
   std::vector<std::string> connected_serials;
   for (Panda *p : pandas) {
     connected_serials.push_back(p->hw_serial());
   }
 
   {
-    auto ignition_opt = send_panda_states(pm, pandas, is_onroad, spoofing_started, always_offroad);
+    auto ignition_opt = send_panda_states(pm, pandas, is_onroad, spoofing_started);
     if (!ignition_opt) {
       LOGE("Failed to get ignition_opt");
       return;
@@ -381,7 +360,7 @@ void process_panda_state(std::vector<Panda *> &pandas, PubMaster *pm, bool engag
     }
 
     for (const auto &panda : pandas) {
-      panda->send_heartbeat(engaged, engaged_mads);
+      panda->send_heartbeat(engaged);
     }
   }
 }
@@ -442,9 +421,9 @@ void process_peripheral_state(Panda *panda, PubMaster *pm, bool no_fan_control) 
     }
 
     if (ir_pwr != prev_ir_pwr || sm.frame % 100 == 0) {
-      int16_t ir_panda = util::map_val(ir_pwr, 0, 100, 0, MAX_IR_PANDA_VAL);
+      int16_t ir_panda = util::map_val(ir_pwr, 0, 100, 0, MAX_IR_PANDA_VAL); 
       panda->set_ir_pwr(ir_panda);
-      Hardware::set_ir_power(ir_pwr);
+      Hardware::set_ir_power(ir_pwr); 
       prev_ir_pwr = ir_pwr;
     }
   }
@@ -460,14 +439,12 @@ void pandad_run(std::vector<Panda *> &pandas) {
 
   Params params;
   RateKeeper rk("pandad", 100);
-  SubMaster sm({"selfdriveState", "selfdriveStateSP", "carParams"});
+  SubMaster sm({"selfdriveState"});
   PubMaster pm({"can", "pandaStates", "peripheralState"});
   PandaSafety panda_safety(pandas);
   Panda *peripheral_panda = pandas[0];
   bool engaged = false;
-  bool engaged_mads = false;
   bool is_onroad = false;
-  bool always_offroad = false;
 
   // Main loop: receive CAN data and process states
   while (!do_exit && check_all_connected(pandas)) {
@@ -482,10 +459,8 @@ void pandad_run(std::vector<Panda *> &pandas) {
     if (rk.frame() % 10 == 0) {
       sm.update(0);
       engaged = sm.allAliveAndValid({"selfdriveState"}) && sm["selfdriveState"].getSelfdriveState().getEnabled();
-      engaged_mads = process_mads_heartbeat(&sm);
       is_onroad = params.getBool("IsOnroad");
-      always_offroad = panda_safety.getOffroadMode();
-      process_panda_state(pandas, &pm, engaged, engaged_mads, is_onroad, spoofing_started, always_offroad);
+      process_panda_state(pandas, &pm, engaged, is_onroad, spoofing_started);
       panda_safety.configureSafetyMode(is_onroad);
     }
 
