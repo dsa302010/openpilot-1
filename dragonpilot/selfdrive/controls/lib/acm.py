@@ -25,15 +25,15 @@ PITCH_UPHILL_THRESHOLD = 0.015
 PITCH_DOWNHILL_THRESHOLD = -0.030 
 
 # --- 3. Soft Hold (防點頭) 參數 ---
-SOFT_HOLD_ACCEL = -0.00       
-SOFT_HOLD_RANGE_MIN = 0.76    
-SOFT_HOLD_RANGE_MAX = 1.00    
+SOFT_HOLD_ACCEL = -0.00       # 強制加速度上限 (0.0=滑行)
+SOFT_HOLD_RANGE_MIN = 0.76    # 觸發下限：76% 安全距離
+SOFT_HOLD_RANGE_MAX = 1.00    # 觸發上限：100% 安全距離
 
-# --- 4. [修改] Dynamic Soft Stop (高速解封版) ---
+# --- 4. [修改] Dynamic Soft Stop (舒適與安全兼顧版) ---
 # 策略：
-#   1. 低速 (0~18kph): 限制 -1.5 (舒適)
-#   2. 中速 (72kph): 限制 -2.5 (符合要求)
-#   3. 高速 (108kph): 限制 -5.0 (完全解封，避免高速壓制不住)
+#   1. 低速 (0~18kph): 限制 -1.5 (舒適優先)
+#   2. 中速 (72kph): 放寬至 -2.5 (解決 60kph 煞車太重問題)
+#   3. 高速 (108kph): 放寬至 -5.0 (完全解封，確保高速煞車能力)
 #
 #   數值設定：
 #   - 0.0 m/s (0 kph)   -> -1.5
@@ -41,17 +41,20 @@ SOFT_HOLD_RANGE_MAX = 1.00
 #   - 20.0 m/s (72 kph) -> -2.5
 #   - 30.0 m/s (108 kph)-> -5.0 (實際上等於不限制)
 SOFT_STOP_SPEED_BP = [0.0,   5.0,  20.0, 30.0]   # [m/s]
-SOFT_STOP_DECEL_V  = [-1.5, -1.5,  -2.5, -5.0]   # [m/s^2]
+SOFT_STOP_DECEL_V  = [-1.5, -1.5,  -2.5, -5.0]   # [m/s^2] 限制值
 
-SOFT_STOP_RANGE_CRITICAL = 0.60  # [安全紅線 1] 距離剩 60% 時解除限制
-SOFT_STOP_TTC_CRITICAL   = 2.0   # [安全紅線 2] TTC 剩 2.0秒 時解除限制
+# 安全紅線：若觸發以下任一條件，限制立即失效
+SOFT_STOP_RANGE_CRITICAL = 0.60  # 距離剩 60%
+SOFT_STOP_TTC_CRITICAL   = 2.0   # TTC 剩 2.0秒
 
-# --- 5. [新增] 動態 TTC 限制參數 (台灣路況優化版) ---
-TTC_THRESHOLD_BP_SPEED = [5.5, 25.0]   # [m/s] 20kph, 90kph
-TTC_THRESHOLD_VALS     = [1.8,  2.8]   # [s]
+# --- 5. [保留] 動態 TTC 限制參數 (台灣路況優化版) ---
+# (A) TTC 觸發門檻
+TTC_THRESHOLD_BP_SPEED = [11.1, 25.0]  # [m/s] 40kph, 90kph
+TTC_THRESHOLD_VALS     = [2.0,  2.5]   # [s]
 
+# (B) 加速度限制值
 LIMIT_BP_SPEED         = [10.0, 25.0]  # [m/s] 36kph, 90kph
-LIMIT_ACCEL_VALS       = [1.2,  0.4]   # [m/s^2]
+LIMIT_ACCEL_VALS       = [1.5,  0.5]   # [m/s^2]
 
 # --- 6. 其他常數 ---
 TTC_BP = [10., 30.]
@@ -81,7 +84,7 @@ class ACM:
     self.personality = log.LongitudinalPersonality.standard
 
   # ============================================================================
-  # 邏輯區塊 1: 狀態更新 (維持不變)
+  # 邏輯區塊 1: 狀態更新與 ACM 啟用判斷
   # ============================================================================
   def _check_emergency_conditions(self, lead, v_ego, current_time):
     if not lead or not lead.status:
@@ -171,7 +174,7 @@ class ACM:
     self._active_prev = self.active
 
   # ============================================================================
-  # 邏輯區塊 2: 軌跡修正核心
+  # 邏輯區塊 2: 軌跡修正核心 (Soft Hold / Soft Stop / TTC Limit)
   # ============================================================================
 
   def _apply_ttc_limit(self, a_desired_trajectory, lead, v_ego):
@@ -180,7 +183,7 @@ class ACM:
         closing_speed = -lead.vRel
         real_ttc = lead.dRel / max(closing_speed, 0.1)
 
-        # 安全檢查：若 TTC 極低 (<1.5s)，不進行任何限制
+        # 安全檢查：若 TTC 極低 (<1.5s)，不進行任何限制，全力閃避
         if real_ttc < 1.5:
             return a_desired_trajectory
 
@@ -197,6 +200,7 @@ class ACM:
     if not lead.status:
       return a_desired_trajectory
 
+    # 基礎保護
     if self.current_pitch > PITCH_UPHILL_THRESHOLD or self.current_pitch < PITCH_DOWNHILL_THRESHOLD:
       return a_desired_trajectory
     if lead.vRel > 0.1 and lead.vLead > 0.2:
@@ -213,17 +217,18 @@ class ACM:
     else:
       ratio = lead_obstacle_dist / desired_dist
 
-    # 計算 TTC 供安全檢查用
+    # 計算 TTC 供安全檢查用 (若前車比我慢)
     current_ttc = 100.0
     if lead.vRel < 0:
         current_ttc = lead.dRel / max(-lead.vRel, 0.1)
 
-    # 邏輯 A: Soft Hold
+    # 邏輯 A: Soft Hold (76% - 100%) -> 強制滑行
+    # (注意：這裡不需太嚴格的安全檢查，因為只是滑行，不是煞車)
     if SOFT_HOLD_RANGE_MIN < ratio < SOFT_HOLD_RANGE_MAX:
       a_desired_trajectory = np.minimum(a_desired_trajectory, SOFT_HOLD_ACCEL)
 
     # 邏輯 B: Dynamic Soft Stop (含安全逃脫 + 高速解封)
-    # 安全條件檢查
+    # 安全條件檢查: 距離 > 60% 且 TTC > 2.0s
     is_safe_distance = ratio > SOFT_STOP_RANGE_CRITICAL
     is_safe_ttc      = current_ttc > SOFT_STOP_TTC_CRITICAL
 
@@ -232,10 +237,11 @@ class ACM:
         current_decel_limit = np.interp(v_ego, SOFT_STOP_SPEED_BP, SOFT_STOP_DECEL_V)
         
         # 限制煞車力道 (削峰)
-        # 注意: 108km/h時限制為-5.0，這代表如果系統請求-3.0，將不會被限制 (因為 -3.0 > -5.0)
+        # 注意: np.maximum 取較大值，例如 max(-3.5, -2.5) = -2.5 (限制生效)
+        #       max(-3.5, -5.0) = -3.5 (限制無效，允許重煞)
         a_desired_trajectory = np.maximum(a_desired_trajectory, current_decel_limit)
     else:
-        # 距離過近或 TTC 過低，解除限制
+        # 距離過近或 TTC 過低，解除限制，允許 Openpilot 全力煞車
         pass 
 
     return a_desired_trajectory
