@@ -29,7 +29,7 @@ SOFT_HOLD_ACCEL = -0.00       # 強制加速度上限 (0.0=滑行)
 SOFT_HOLD_RANGE_MIN = 0.76    # 觸發下限：76% 安全距離
 SOFT_HOLD_RANGE_MAX = 1.00    # 觸發上限：100% 安全距離
 
-# --- 4. [修改] Dynamic Soft Stop (含緊急煞車旁路) ---
+# --- 4. [修改] Dynamic Soft Stop (舒適強制版) ---
 # 策略：
 #   1. 低速 (0~18kph): 限制 -1.5 (舒適優先)
 #   2. 中速 (72kph): 放寬至 -2.5 (解決 60kph 煞車太重問題)
@@ -43,14 +43,9 @@ SOFT_HOLD_RANGE_MAX = 1.00    # 觸發上限：100% 安全距離
 SOFT_STOP_SPEED_BP = [0.0,   5.0,  20.0, 30.0]   # [m/s]
 SOFT_STOP_DECEL_V  = [-1.5, -1.5,  -2.5, -5.0]   # [m/s^2] 限制值
 
-# [安全紅線 1 & 2]：環境危險判斷
-SOFT_STOP_RANGE_CRITICAL = 0.60  # 距離剩 60%
-SOFT_STOP_TTC_CRITICAL   = 2.0   # TTC 剩 2.0秒
-
-# [安全紅線 3]：系統意圖判斷 (新加入)
-# 如果 MPC 原始請求小於此值 (例如 -3.5)，代表系統判定需要緊急煞車
-# 此時應直接解除 Soft Stop，避免阻礙系統急煞。
-SOFT_STOP_EMERGENCY_REQ  = -3.0  # m/s^2
+# [安全紅線]：僅保留物理防線，移除 MPC 數值判斷
+SOFT_STOP_RANGE_CRITICAL = 0.60  # 距離剩 60% 時解除
+SOFT_STOP_TTC_CRITICAL   = 2.0   # TTC 剩 2.0秒 時解除
 
 # --- 5. [保留] 動態 TTC 限制參數 (台灣路況優化版) ---
 # (A) TTC 觸發門檻
@@ -234,26 +229,21 @@ class ACM:
 
     # 邏輯 B: Dynamic Soft Stop (含安全逃脫 + 高速解封)
     
-    # [安全鎖 1] 距離與 TTC 檢查
+    # [安全鎖] 物理條件判斷
+    # 只要距離 > 60% 且 TTC > 2.0s，就強制執行舒適限制。
+    # 不管 MPC 請求多少 (因為它很吵，容易誤報)，我們都強制削峰。
     is_safe_distance = ratio > SOFT_STOP_RANGE_CRITICAL
     is_safe_ttc      = current_ttc > SOFT_STOP_TTC_CRITICAL
     
-    # [安全鎖 2] 檢查原始請求 (新增!)
-    # 如果 MPC 原本就請求了極大的煞車力道 (例如 < -3.0)，代表系統已判定危險
-    # 此時應直接 Bypass，不應限制它
-    is_emergency_req = np.min(a_desired_trajectory) < SOFT_STOP_EMERGENCY_REQ
-
-    if is_safe_distance and is_safe_ttc and not is_emergency_req:
+    if is_safe_distance and is_safe_ttc:
         # 使用多點插值 (-1.5 -> -2.5 -> -5.0)
         current_decel_limit = np.interp(v_ego, SOFT_STOP_SPEED_BP, SOFT_STOP_DECEL_V)
         
         # 限制煞車力道 (削峰)
-        # 舉例: 
-        #  - 低速時 Limit = -1.5, MPC請求 -2.0 -> 結果 -1.5 (舒適)
-        #  - 低速時 Limit = -1.5, MPC請求 -3.5 (緊急) -> 因為 triggered 'is_emergency_req', 進入 else 分支 -> 結果 -3.5 (安全)
+        # 例如: 請求 -3.5, 限制 -1.5 -> 結果 -1.5 (強制舒適)
         a_desired_trajectory = np.maximum(a_desired_trajectory, current_decel_limit)
     else:
-        # 距離過近、TTC 過低、或 系統請求緊急煞車 -> 解除限制
+        # 距離過近或 TTC 過低 -> 真的危險了，解除限制，允許 Openpilot 全力煞車
         pass 
 
     return a_desired_trajectory
