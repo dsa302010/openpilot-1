@@ -25,29 +25,33 @@ PITCH_UPHILL_THRESHOLD = 0.015
 PITCH_DOWNHILL_THRESHOLD = -0.030 
 
 # --- 3. Soft Hold (防點頭) 參數 ---
-SOFT_HOLD_ACCEL = -0.00       # 強制加速度上限 (0.0=滑行)
-SOFT_HOLD_RANGE_MIN = 0.76    # 觸發下限：76% 安全距離
-SOFT_HOLD_RANGE_MAX = 1.00    # 觸發上限：100% 安全距離
+SOFT_HOLD_ACCEL = -0.00       
+SOFT_HOLD_RANGE_MIN = 0.76    
+SOFT_HOLD_RANGE_MAX = 1.00    
 
-# --- 4. Soft Stop (防頓挫) 參數 ---
-SOFT_STOP_SPEED_MAX = 5.0     # 啟用速度：< 5 m/s (18 km/h)
-SOFT_STOP_MAX_DECEL = -1.50   # 最大煞車力道限制
-SOFT_STOP_RANGE_CRITICAL = 0.60 # 緊急界線：距離剩 60% 時取消限制
+# --- 4. [修改] Dynamic Soft Stop (高速解封版) ---
+# 策略：
+#   1. 低速 (0~18kph): 限制 -1.5 (舒適)
+#   2. 中速 (72kph): 限制 -2.5 (符合要求)
+#   3. 高速 (108kph): 限制 -5.0 (完全解封，避免高速壓制不住)
+#
+#   數值設定：
+#   - 0.0 m/s (0 kph)   -> -1.5
+#   - 5.0 m/s (18 kph)  -> -1.5
+#   - 20.0 m/s (72 kph) -> -2.5
+#   - 30.0 m/s (108 kph)-> -5.0 (實際上等於不限制)
+SOFT_STOP_SPEED_BP = [0.0,   5.0,  20.0, 30.0]   # [m/s]
+SOFT_STOP_DECEL_V  = [-1.5, -1.5,  -2.5, -5.0]   # [m/s^2]
+
+SOFT_STOP_RANGE_CRITICAL = 0.60  # [安全紅線 1] 距離剩 60% 時解除限制
+SOFT_STOP_TTC_CRITICAL   = 2.0   # [安全紅線 2] TTC 剩 2.0秒 時解除限制
 
 # --- 5. [新增] 動態 TTC 限制參數 (台灣路況優化版) ---
-# 說明：針對市區防插隊與高速舒適性進行分層設定
-# 
-# (A) TTC 觸發門檻 (Dynamic Threshold)
-# 低速 (<40kph) 用 2.0s -> 跟緊一點防止插隊
-# 高速 (>90kph) 用 2.5s -> 提早反應比較舒適
-TTC_THRESHOLD_BP_SPEED = [11.1, 25.0]  # [m/s] 40kph, 90kph
-TTC_THRESHOLD_VALS     = [2.0,  2.5]   # [s]   對應的 TTC 秒數
+TTC_THRESHOLD_BP_SPEED = [5.5, 25.0]   # [m/s] 20kph, 90kph
+TTC_THRESHOLD_VALS     = [1.8,  2.8]   # [s]
 
-# (B) 加速度限制值 (Dynamic Limit)
-# 低速 (<36kph) 允許 1.0 m/s^2 -> 塞車時起步要靈活
-# 高速 (>90kph) 限制 0.4 m/s^2 -> 高速接近前車時要非常溫柔
 LIMIT_BP_SPEED         = [10.0, 25.0]  # [m/s] 36kph, 90kph
-LIMIT_ACCEL_VALS       = [1.5,  0.5]   # [m/s^2] 對應的最大加速度
+LIMIT_ACCEL_VALS       = [1.2,  0.4]   # [m/s^2]
 
 # --- 6. 其他常數 ---
 TTC_BP = [10., 30.]
@@ -77,7 +81,7 @@ class ACM:
     self.personality = log.LongitudinalPersonality.standard
 
   # ============================================================================
-  # 邏輯區塊 1: 狀態更新與 ACM 啟用判斷
+  # 邏輯區塊 1: 狀態更新 (維持不變)
   # ============================================================================
   def _check_emergency_conditions(self, lead, v_ego, current_time):
     if not lead or not lead.status:
@@ -167,56 +171,41 @@ class ACM:
     self._active_prev = self.active
 
   # ============================================================================
-  # 邏輯區塊 2: 軌跡修正核心 (Soft Hold / Soft Stop / TTC Limit)
+  # 邏輯區塊 2: 軌跡修正核心
   # ============================================================================
 
-  # [新增] 動態 TTC 加速度限制 (Dynamic TTC Limit)
   def _apply_ttc_limit(self, a_desired_trajectory, lead, v_ego):
-    """
-    動態 TTC 限制邏輯：
-    1. 僅在有前車且正在接近 (vRel < 0) 時生效。
-    2. 根據當前車速動態調整 TTC 門檻 (2.0s ~ 2.5s)。
-    3. 根據當前車速動態調整 最大加速度限制 (1.0 ~ 0.4 m/s^2)。
-    """
+    """ 動態 TTC 限制邏輯 """
     if lead.status and lead.vRel < -0.1:
-        # 計算真實 TTC (Distance / Closing Speed)
         closing_speed = -lead.vRel
         real_ttc = lead.dRel / max(closing_speed, 0.1)
 
-        # 1. 計算當前速度下的 TTC 門檻 (市區2.0s <--> 高速2.5s)
+        # 安全檢查：若 TTC 極低 (<1.5s)，不進行任何限制
+        if real_ttc < 1.5:
+            return a_desired_trajectory
+
         current_ttc_threshold = np.interp(v_ego, TTC_THRESHOLD_BP_SPEED, TTC_THRESHOLD_VALS)
 
         if real_ttc < current_ttc_threshold:
-            # 2. 計算當前速度下的 加速度上限 (市區1.0 <--> 高速0.4)
             current_accel_limit = np.interp(v_ego, LIMIT_BP_SPEED, LIMIT_ACCEL_VALS)
-            
-            # 3. 執行限制 (取 min, 不影響原本的煞車請求)
             a_desired_trajectory = np.minimum(a_desired_trajectory, current_accel_limit)
             
     return a_desired_trajectory
 
   def _apply_soft_hold(self, a_desired_trajectory, v_ego, lead):
-    """
-    對 MPC 輸出的軌跡進行修正，實現舒適跟車與煞停。
-    """
+    """ 對 MPC 輸出的軌跡進行修正，實現舒適跟車與煞停。 """
     if not lead.status:
       return a_desired_trajectory
 
-    # 坡度保護
     if self.current_pitch > PITCH_UPHILL_THRESHOLD or self.current_pitch < PITCH_DOWNHILL_THRESHOLD:
       return a_desired_trajectory
-
-    # 起步加速保護
     if lead.vRel > 0.1 and lead.vLead > 0.2:
         return a_desired_trajectory
-
-    # 前車靜止保護
     if lead.vLead < 0.5: 
         return a_desired_trajectory
 
     t_follow = get_T_FOLLOW(self.personality)
     desired_dist = get_safe_obstacle_distance(v_ego, t_follow)
-    
     lead_obstacle_dist = lead.dRel + get_stopped_equivalence_factor(lead.vLead)
 
     if desired_dist < 0.1:
@@ -224,13 +213,30 @@ class ACM:
     else:
       ratio = lead_obstacle_dist / desired_dist
 
-    # 邏輯 A: Soft Hold (76% - 100%) -> 強制滑行
+    # 計算 TTC 供安全檢查用
+    current_ttc = 100.0
+    if lead.vRel < 0:
+        current_ttc = lead.dRel / max(-lead.vRel, 0.1)
+
+    # 邏輯 A: Soft Hold
     if SOFT_HOLD_RANGE_MIN < ratio < SOFT_HOLD_RANGE_MAX:
       a_desired_trajectory = np.minimum(a_desired_trajectory, SOFT_HOLD_ACCEL)
 
-    # 邏輯 B: Soft Stop (< 18km/h) -> 限制最大煞車
-    if (v_ego < SOFT_STOP_SPEED_MAX) and (ratio > SOFT_STOP_RANGE_CRITICAL):
-        a_desired_trajectory = np.maximum(a_desired_trajectory, SOFT_STOP_MAX_DECEL)
+    # 邏輯 B: Dynamic Soft Stop (含安全逃脫 + 高速解封)
+    # 安全條件檢查
+    is_safe_distance = ratio > SOFT_STOP_RANGE_CRITICAL
+    is_safe_ttc      = current_ttc > SOFT_STOP_TTC_CRITICAL
+
+    if is_safe_distance and is_safe_ttc:
+        # 使用多點插值 (-1.5 -> -2.5 -> -5.0)
+        current_decel_limit = np.interp(v_ego, SOFT_STOP_SPEED_BP, SOFT_STOP_DECEL_V)
+        
+        # 限制煞車力道 (削峰)
+        # 注意: 108km/h時限制為-5.0，這代表如果系統請求-3.0，將不會被限制 (因為 -3.0 > -5.0)
+        a_desired_trajectory = np.maximum(a_desired_trajectory, current_decel_limit)
+    else:
+        # 距離過近或 TTC 過低，解除限制
+        pass 
 
     return a_desired_trajectory
 
@@ -241,26 +247,22 @@ class ACM:
     
     traj = a_desired_trajectory
 
-    # --- 階段 1: ACM 原生邏輯 (無前車、遠距離滑行) ---
+    # --- 階段 1: ACM 原生邏輯 ---
     if self.active:
       min_accel = np.min(traj)
       if min_accel < EMERGENCY_DECEL_THRESHOLD:
         cloudlog.warning(f"ACM aborting: MPC requested {min_accel:.2f} m/s² braking")
         self.active = False
       else:
-        # ACM 運作中：將微減速 (-1.0 ~ 0) 全部抹平為 0 (滑行)
         modified_trajectory = np.copy(traj)
         for i in range(len(modified_trajectory)):
           if -1.0 < modified_trajectory[i] < 0:
             modified_trajectory[i] = 0.0
         traj = modified_trajectory
     
-    # --- 階段 2: Soft Hold & Stop & TTC Limit 邏輯 (跟車模式) ---
+    # --- 階段 2: 跟車相關修正 ---
     if lead is not None:
-        # 1. 執行 Soft Hold / Soft Stop (針對距離與靜止)
         traj = self._apply_soft_hold(traj, v_ego, lead)
-        
-        # 2. [新增] 執行 Dynamic TTC Limit (針對接近過程)
         traj = self._apply_ttc_limit(traj, lead, v_ego)
     
     return traj
