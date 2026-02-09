@@ -29,7 +29,7 @@ SOFT_HOLD_ACCEL = -0.00       # 強制加速度上限 (0.0=滑行)
 SOFT_HOLD_RANGE_MIN = 0.76    # 觸發下限：76% 安全距離
 SOFT_HOLD_RANGE_MAX = 1.00    # 觸發上限：100% 安全距離
 
-# --- 4. [修改] Dynamic Soft Stop (舒適強制版) ---
+# --- 4. [修改] Dynamic Soft Stop (舒適與安全兼顧版) ---
 # 策略：
 #   1. 低速 (0~18kph): 限制 -1.5 (舒適優先)
 #   2. 中速 (72kph): 放寬至 -2.5 (解決 60kph 煞車太重問題)
@@ -43,9 +43,9 @@ SOFT_HOLD_RANGE_MAX = 1.00    # 觸發上限：100% 安全距離
 SOFT_STOP_SPEED_BP = [0.0,   5.0,  20.0, 30.0]   # [m/s]
 SOFT_STOP_DECEL_V  = [-1.5, -1.5,  -2.5, -5.0]   # [m/s^2] 限制值
 
-# [安全紅線]：僅保留物理防線，移除 MPC 數值判斷
-SOFT_STOP_RANGE_CRITICAL = 0.60  # 距離剩 60% 時解除
-SOFT_STOP_TTC_CRITICAL   = 1.0   # TTC 剩 2.0秒 時解除
+# 安全紅線：若觸發以下任一條件，限制立即失效
+SOFT_STOP_RANGE_CRITICAL = 0.60  # 距離剩 60%
+SOFT_STOP_TTC_CRITICAL   = 1.0   # TTC 剩 1.0秒
 
 # --- 5. [保留] 動態 TTC 限制參數 (台灣路況優化版) ---
 # (A) TTC 觸發門檻
@@ -228,22 +228,20 @@ class ACM:
       a_desired_trajectory = np.minimum(a_desired_trajectory, SOFT_HOLD_ACCEL)
 
     # 邏輯 B: Dynamic Soft Stop (含安全逃脫 + 高速解封)
-    
-    # [安全鎖] 物理條件判斷
-    # 只要距離 > 60% 且 TTC > 2.0s，就強制執行舒適限制。
-    # 不管 MPC 請求多少 (因為它很吵，容易誤報)，我們都強制削峰。
+    # 安全條件檢查: 距離 > 60% 且 TTC > 2.0s
     is_safe_distance = ratio > SOFT_STOP_RANGE_CRITICAL
     is_safe_ttc      = current_ttc > SOFT_STOP_TTC_CRITICAL
-    
+
     if is_safe_distance and is_safe_ttc:
         # 使用多點插值 (-1.5 -> -2.5 -> -5.0)
         current_decel_limit = np.interp(v_ego, SOFT_STOP_SPEED_BP, SOFT_STOP_DECEL_V)
         
         # 限制煞車力道 (削峰)
-        # 例如: 請求 -3.5, 限制 -1.5 -> 結果 -1.5 (強制舒適)
+        # 注意: np.maximum 取較大值，例如 max(-3.5, -2.5) = -2.5 (限制生效)
+        #       max(-3.5, -5.0) = -3.5 (限制無效，允許重煞)
         a_desired_trajectory = np.maximum(a_desired_trajectory, current_decel_limit)
     else:
-        # 距離過近或 TTC 過低 -> 真的危險了，解除限制，允許 Openpilot 全力煞車
+        # 距離過近或 TTC 過低，解除限制，允許 Openpilot 全力煞車
         pass 
 
     return a_desired_trajectory
