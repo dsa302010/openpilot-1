@@ -55,7 +55,6 @@ BO_ 384 TRACK_A_0: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 385 TRACK_A_1: 8 XXX
@@ -65,7 +64,6 @@ BO_ 385 TRACK_A_1: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 386 TRACK_A_2: 8 XXX
@@ -75,7 +73,6 @@ BO_ 386 TRACK_A_2: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 387 TRACK_A_3: 8 XXX
@@ -85,7 +82,6 @@ BO_ 387 TRACK_A_3: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 388 TRACK_A_4: 8 XXX
@@ -95,7 +91,6 @@ BO_ 388 TRACK_A_4: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 389 TRACK_A_5: 8 XXX
@@ -105,7 +100,6 @@ BO_ 389 TRACK_A_5: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 390 TRACK_A_6: 8 XXX
@@ -115,7 +109,6 @@ BO_ 390 TRACK_A_6: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 391 TRACK_A_7: 8 XXX
@@ -125,7 +118,6 @@ BO_ 391 TRACK_A_7: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 392 TRACK_A_8: 8 XXX
@@ -135,7 +127,6 @@ BO_ 392 TRACK_A_8: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 393 TRACK_A_9: 8 XXX
@@ -145,7 +136,6 @@ BO_ 393 TRACK_A_9: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 394 TRACK_A_10: 8 XXX
@@ -155,7 +145,6 @@ BO_ 394 TRACK_A_10: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 395 TRACK_A_11: 8 XXX
@@ -165,7 +154,6 @@ BO_ 395 TRACK_A_11: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 396 TRACK_A_12: 8 XXX
@@ -175,7 +163,6 @@ BO_ 396 TRACK_A_12: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 397 TRACK_A_13: 8 XXX
@@ -185,7 +172,6 @@ BO_ 397 TRACK_A_13: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 398 TRACK_A_14: 8 XXX
@@ -195,7 +181,6 @@ BO_ 398 TRACK_A_14: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 399 TRACK_A_15: 8 XXX
@@ -205,7 +190,6 @@ BO_ 399 TRACK_A_15: 8 XXX
  SG_ NEW_TRACK : 36|1@0+ (1,0) [0|1] "" XXX
  SG_ REL_SPEED : 47|13@0- (0.0125,0) [-100|100] "m/s" XXX
  SG_ VALID : 48|1@0+ (1,0) [0|1] "" XXX
- SG_ NEW_TRACK : 51|1@0+ (1,0) [0|1] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 400 TRACK_B_0: 8 XXX

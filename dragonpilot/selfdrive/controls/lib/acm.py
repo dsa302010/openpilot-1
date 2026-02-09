@@ -3,8 +3,16 @@ import numpy as np
 from cereal import log
 from openpilot.common.swaglog import cloudlog
 
+# ==============================================================================
+# [移植注意] 引入 MPC 函式庫
+# ==============================================================================
+from openpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import (
+  COMFORT_BRAKE, STOP_DISTANCE, get_safe_obstacle_distance,
+  get_stopped_equivalence_factor, get_T_FOLLOW
+)
+
 # =========================================================
-# [參數設定區] ACM & Soft Hold 參數
+# [參數設定區] ACM & Soft Hold & TTC Limit 參數
 # =========================================================
 
 # --- 1. 滑行速度區間設定 (單位：km/h) ---
@@ -21,18 +29,47 @@ SPEED_OFFSET_MAX_FLAT_KPH = 10.0
 SPEED_OFFSET_MAX_DOWNHILL_KPH = 5.0
 
 # --- 2. 坡度邏輯設定 (單位：弧度 Radians) ---
-# 0.015 rad 約等於 0.86 度 (1.5% 坡度)
-# 0.030 rad 約等於 1.72 度 (3.0% 坡度)
-
-# 上坡門檻：大於 1.5% (0.015) -> 禁止滑行，確保爬坡有力
 PITCH_UPHILL_THRESHOLD = 0.015
-
-# 下坡門檻：小於 -3.0% (-0.03) -> 切換為嚴格模式 (+5km/h)
-# 意思：在 0% ~ 3% 的緩下坡，我們依然允許滑到 +10km/h (模式 A)
 PITCH_DOWNHILL_THRESHOLD = -0.030
 
-# --- 3. 動態 TTC (碰撞時間) 安全設定 ---
-# 速度 [36kph, 108kph] -> TTC [2.0s, 3.0s] 平滑過渡
+# --- 3. Soft Hold (防點頭) 參數 ---
+SOFT_HOLD_ACCEL = -0.00       # 強制加速度上限 (0.0=滑行)
+SOFT_HOLD_RANGE_MIN = 0.76    # 觸發下限：76% 安全距離
+SOFT_HOLD_RANGE_MAX = 1.00    # 觸發上限：100% 安全距離
+
+# --- 4. [修改] Dynamic Soft Stop (含緊急煞車旁路) ---
+# 策略：
+#   1. 低速 (0~18kph): 限制 -1.5 (舒適優先)
+#   2. 中速 (72kph): 放寬至 -2.5 (解決 60kph 煞車太重問題)
+#   3. 高速 (108kph): 放寬至 -5.0 (完全解封，確保高速煞車能力)
+#
+#   數值設定：
+#   - 0.0 m/s (0 kph)   -> -1.5
+#   - 5.0 m/s (18 kph)  -> -1.5
+#   - 20.0 m/s (72 kph) -> -2.5
+#   - 30.0 m/s (108 kph)-> -5.0 (實際上等於不限制)
+SOFT_STOP_SPEED_BP = [0.0,   5.0,  20.0, 30.0]   # [m/s]
+SOFT_STOP_DECEL_V  = [-1.5, -1.5,  -2.5, -5.0]   # [m/s^2] 限制值
+
+# [安全紅線 1 & 2]：環境危險判斷
+SOFT_STOP_RANGE_CRITICAL = 0.60  # 距離剩 60%
+SOFT_STOP_TTC_CRITICAL   = 2.0   # TTC 剩 2.0秒
+
+# [安全紅線 3]：系統意圖判斷 (新加入)
+# 如果 MPC 原始請求小於此值 (例如 -3.5)，代表系統判定需要緊急煞車
+# 此時應直接解除 Soft Stop，避免阻礙系統急煞。
+SOFT_STOP_EMERGENCY_REQ  = -3.0  # m/s^2
+
+# --- 5. [保留] 動態 TTC 限制參數 (台灣路況優化版) ---
+# (A) TTC 觸發門檻
+TTC_THRESHOLD_BP_SPEED = [11.1, 25.0]  # [m/s] 40kph, 90kph
+TTC_THRESHOLD_VALS     = [2.0,  2.5]   # [s]
+
+# (B) 加速度限制值
+LIMIT_BP_SPEED         = [10.0, 25.0]  # [m/s] 36kph, 90kph
+LIMIT_ACCEL_VALS       = [1.5,  0.5]   # [m/s^2]
+
+# --- 6. 其他常數 ---
 TTC_BP = [10., 30.]
 TTC_V  = [2.0, 3.0]
 
@@ -59,6 +96,11 @@ class ACM:
     self.current_pitch = 0.0
     self.current_max_offset = 0.0
 
+    self.personality = log.LongitudinalPersonality.standard
+
+  # ============================================================================
+  # 邏輯區塊 1: 狀態更新與 ACM 啟用判斷
+  # ============================================================================
   def _check_emergency_conditions(self, lead, v_ego, current_time):
     if not lead or not lead.status:
       return False
@@ -120,7 +162,9 @@ class ACM:
             not in_cooldown and
             self._is_in_coast_window)
 
-  def update_states(self, cc, rs, user_ctrl_lon, v_ego, v_cruise):
+  def update_states(self, cc, rs, user_ctrl_lon, v_ego, v_cruise, personality=log.LongitudinalPersonality.standard):
+    self.personality = personality
+
     if not self.enabled or len(cc.orientationNED) != 3:
       self.active = False
       return
@@ -150,31 +194,108 @@ class ACM:
     self._active_prev = self.active
 
   # ============================================================================
-  # 邏輯區塊 2: Soft Hold + Soft Stop 核心邏輯 (主要修改處)
+  # 邏輯區塊 2: 軌跡修正核心 (Soft Hold / Soft Stop / TTC Limit)
   # ============================================================================
+
+  def _apply_ttc_limit(self, a_desired_trajectory, lead, v_ego):
+    """ 動態 TTC 限制邏輯 """
+    if lead.status and lead.vRel < -0.1:
+        closing_speed = -lead.vRel
+        real_ttc = lead.dRel / max(closing_speed, 0.1)
+
+        # 安全檢查：若 TTC 極低 (<1.5s)，不進行任何限制，全力閃避
+        if real_ttc < 1.5:
+            return a_desired_trajectory
+
+        current_ttc_threshold = np.interp(v_ego, TTC_THRESHOLD_BP_SPEED, TTC_THRESHOLD_VALS)
+
+        if real_ttc < current_ttc_threshold:
+            current_accel_limit = np.interp(v_ego, LIMIT_BP_SPEED, LIMIT_ACCEL_VALS)
+            a_desired_trajectory = np.minimum(a_desired_trajectory, current_accel_limit)
+
+    return a_desired_trajectory
+
   def _apply_soft_hold(self, a_desired_trajectory, v_ego, lead):
-    """
-    對 MPC 輸出的軌跡進行修正，實現舒適跟車與煞停。
-    """
-    # 1. 前置檢查：無前車則不介入
+    """ 對 MPC 輸出的軌跡進行修正，實現舒適跟車與煞停。 """
     if not lead.status:
       return a_desired_trajectory
 
-    # 2. 坡度保護：
-    #    上坡 (>1.5%)：需要油門爬坡，禁止限制加速度。
-    #    下坡 (<-3.0%)：重力加速，禁止強制滑行。
+    # 基礎保護
     if self.current_pitch > PITCH_UPHILL_THRESHOLD or self.current_pitch < PITCH_DOWNHILL_THRESHOLD:
       return a_desired_trajectory
+    if lead.vRel > 0.1 and lead.vLead > 0.2:
+        return a_desired_trajectory
+    if lead.vLead < 0.5:
+        return a_desired_trajectory
 
-    min_accel = np.min(a_desired_trajectory)
-    if min_accel < EMERGENCY_DECEL_THRESHOLD:
-      cloudlog.warning(f"ACM aborting: MPC requested {min_accel:.2f} m/s² braking")
-      self.active = False
-      return a_desired_trajectory
+    t_follow = get_T_FOLLOW(self.personality)
+    desired_dist = get_safe_obstacle_distance(v_ego, t_follow)
+    lead_obstacle_dist = lead.dRel + get_stopped_equivalence_factor(lead.vLead)
 
-    modified_trajectory = np.copy(a_desired_trajectory)
-    for i in range(len(modified_trajectory)):
-      if -1.0 < modified_trajectory[i] < 0:
-        modified_trajectory[i] = 0.0
+    if desired_dist < 0.1:
+      ratio = 10.0
+    else:
+      ratio = lead_obstacle_dist / desired_dist
 
-    return modified_trajectory
+    # 計算 TTC 供安全檢查用 (若前車比我慢)
+    current_ttc = 100.0
+    if lead.vRel < 0:
+        current_ttc = lead.dRel / max(-lead.vRel, 0.1)
+
+    # 邏輯 A: Soft Hold (76% - 100%) -> 強制滑行
+    # (注意：這裡不需太嚴格的安全檢查，因為只是滑行，不是煞車)
+    if SOFT_HOLD_RANGE_MIN < ratio < SOFT_HOLD_RANGE_MAX:
+      a_desired_trajectory = np.minimum(a_desired_trajectory, SOFT_HOLD_ACCEL)
+
+    # 邏輯 B: Dynamic Soft Stop (含安全逃脫 + 高速解封)
+
+    # [安全鎖 1] 距離與 TTC 檢查
+    is_safe_distance = ratio > SOFT_STOP_RANGE_CRITICAL
+    is_safe_ttc      = current_ttc > SOFT_STOP_TTC_CRITICAL
+
+    # [安全鎖 2] 檢查原始請求 (新增!)
+    # 如果 MPC 原本就請求了極大的煞車力道 (例如 < -3.0)，代表系統已判定危險
+    # 此時應直接 Bypass，不應限制它
+    is_emergency_req = np.min(a_desired_trajectory) < SOFT_STOP_EMERGENCY_REQ
+
+    if is_safe_distance and is_safe_ttc and not is_emergency_req:
+        # 使用多點插值 (-1.5 -> -2.5 -> -5.0)
+        current_decel_limit = np.interp(v_ego, SOFT_STOP_SPEED_BP, SOFT_STOP_DECEL_V)
+
+        # 限制煞車力道 (削峰)
+        # 舉例:
+        #  - 低速時 Limit = -1.5, MPC請求 -2.0 -> 結果 -1.5 (舒適)
+        #  - 低速時 Limit = -1.5, MPC請求 -3.5 (緊急) -> 因為 triggered 'is_emergency_req', 進入 else 分支 -> 結果 -3.5 (安全)
+        a_desired_trajectory = np.maximum(a_desired_trajectory, current_decel_limit)
+    else:
+        # 距離過近、TTC 過低、或 系統請求緊急煞車 -> 解除限制
+        pass
+
+    return a_desired_trajectory
+
+  # ============================================================================
+  # 邏輯區塊 3: 軌跡修正入口
+  # ============================================================================
+  def update_a_desired_trajectory(self, a_desired_trajectory, v_ego=0.0, lead=None):
+
+    traj = a_desired_trajectory
+
+    # --- 階段 1: ACM 原生邏輯 ---
+    if self.active:
+      min_accel = np.min(traj)
+      if min_accel < EMERGENCY_DECEL_THRESHOLD:
+        cloudlog.warning(f"ACM aborting: MPC requested {min_accel:.2f} m/s² braking")
+        self.active = False
+      else:
+        modified_trajectory = np.copy(traj)
+        for i in range(len(modified_trajectory)):
+          if -1.0 < modified_trajectory[i] < 0:
+            modified_trajectory[i] = 0.0
+        traj = modified_trajectory
+
+    # --- 階段 2: 跟車相關修正 ---
+    if lead is not None:
+        traj = self._apply_soft_hold(traj, v_ego, lead)
+        traj = self._apply_ttc_limit(traj, lead, v_ego)
+
+    return traj
