@@ -228,7 +228,7 @@ class ACM:
       a_desired_trajectory = np.minimum(a_desired_trajectory, SOFT_HOLD_ACCEL)
 
     # 邏輯 B: Dynamic Soft Stop (含安全逃脫 + 高速解封)
-    # 安全條件檢查: 距離 > 60% 且 TTC > 2.0s
+    # 安全條件檢查: 距離 > 60% 且 TTC > 1.0s
     is_safe_distance = ratio > SOFT_STOP_RANGE_CRITICAL
     is_safe_ttc      = current_ttc > SOFT_STOP_TTC_CRITICAL
 
